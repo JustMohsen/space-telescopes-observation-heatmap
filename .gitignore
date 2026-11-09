@@ -1,0 +1,31 @@
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Python bytecode & caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Local data & caches (keep directory via .gitkeep, ignore downloaded catalogs)
+data/*.parquet
+data/*.csv
+data/*.fits
+data/*.ecsv
+data/chunks/
+data/cache/
+
+# OS, Editor & Local Reference files
+.DS_Store
+.vscode/
+.idea/
+*.pdf
+
+# Streamlit
+.streamlit/secrets.toml
