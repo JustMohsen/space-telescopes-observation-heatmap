@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+import sys
+import urllib.request
 from datetime import date, timedelta
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+
+_SRC_DIR = Path(__file__).resolve().parent / "src"
+if str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
 
 from telescope_heatmap.binning import compute_healpix_map, filter_observations
 from telescope_heatmap.config import (
@@ -13,6 +20,7 @@ from telescope_heatmap.config import (
     DATA_DIR,
     DEFAULT_NSIDE,
     EXPOSURES_PARQUET_PATH,
+    GITHUB_RELEASE_BASE_URL,
     HEATMAP_TARGET_CATEGORIES,
     NSIDE_OPTIONS,
     POINTINGS_PARQUET_PATH,
@@ -172,6 +180,33 @@ def _inject_apple_ui_styles() -> None:
     )
 
 
+def ensure_parquet_tables_present() -> None:
+    """Download pre-computed Parquet tables from GitHub Releases on first cloud boot if missing locally."""
+    required_paths = [
+        EXPOSURES_PARQUET_PATH,
+        POINTINGS_PARQUET_PATH,
+        TARGETS_PARQUET_PATH,
+        CALIBRATIONS_PARQUET_PATH,
+    ]
+    missing = [p for p in required_paths if not p.exists()]
+    if not missing:
+        return
+
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    with st.spinner("Downloading telescope catalog from GitHub Releases (one-time cloud setup)..."):
+        for target_path in missing:
+            url = f"{GITHUB_RELEASE_BASE_URL}/{target_path.name}"
+            tmp_path = target_path.with_suffix(".parquet.part")
+            try:
+                urllib.request.urlretrieve(url, tmp_path)
+                tmp_path.replace(target_path)
+            except Exception as exc:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+                st.warning(f"Could not download `{target_path.name}` from GitHub Releases ({exc}).")
+                break
+
+
 @st.cache_data(show_spinner=False)
 def load_parquet_tables(mtime_key: float) -> dict[str, pd.DataFrame]:
     """Load the 4 pre-computed Parquet tables into memory (cached across UI interactions)."""
@@ -199,6 +234,8 @@ def main() -> None:
         "Interactive 3D celestial sphere and 2D all-sky heatmaps of where space observatories "
         "have pointed across their mission lifetimes (1978–2026)."
     )
+
+    ensure_parquet_tables_present()
 
     if not EXPOSURES_PARQUET_PATH.exists():
         st.warning(

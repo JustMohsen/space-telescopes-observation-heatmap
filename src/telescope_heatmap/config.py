@@ -11,6 +11,8 @@ POINTINGS_PARQUET_PATH = DATA_DIR / "pointings.parquet"
 TARGETS_PARQUET_PATH = DATA_DIR / "targets.parquet"
 CALIBRATIONS_PARQUET_PATH = DATA_DIR / "calibrations.parquet"
 
+GITHUB_RELEASE_BASE_URL = "https://github.com/JustMohsen/space-telescopes-observation-heatmap/releases/download/v1.0.0"
+
 SUPPORTED_TELESCOPES = {
     "HST": {
         "name": "Hubble Space Telescope (HST)",
