@@ -20,10 +20,12 @@ A few months later, I finally started working on this. I built it in a few days,
 - **2D all-sky maps:** Explore an interactive map and export a Mollweide PNG.
 - **Three coordinate frames:** Switch between Galactic, equatorial, and ecliptic coordinates.
 - **Three metrics:** Compare exposure duration, telescope visits, and unique catalog targets.
-- **Observation explorer:** Search target names, descriptions, classifications, and program titles; inspect systems, visits, exposures, and calibration observations.
+- **Observation explorer:** Search target names, descriptions, classifications, and program titles; inspect systems, visits, exposures, and calibration observations; open their images and data in MAST.
 - **Filters and display:** Choose observatories, observation dates, target categories, grid detail, and light or dark appearance.
 
 Moving Solar System targets appear in the observation explorer and are excluded from the fixed-sky heatmaps. The maps bin recorded pointing locations; colored cells do not represent the exact instrument image footprints.
+
+**MAST links:** “View in MAST” opens a retained archive dataset for visits, exposures, and calibrations, or a raw target-name search for unique targets. “Search MAST” in the system table searches the listed example target names (up to six), rather than every observation in that system. Generic field labels use a nearby-sky search within 0.1° across missions. Archive results may extend beyond the app's filters; image previews and public downloads depend on the dataset. Links are built locally for displayed rows, without additional archive requests or image downloads in the app.
 
 > **Map detail:** To keep memory use low and updates responsive, interactive maps use a capped display grid. Fine and Ultra-Fine change the underlying HEALPix bins but may look similar. Calculations still use the selected binning; PNG exports use a denser display grid.
 

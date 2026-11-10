@@ -1,6 +1,8 @@
 """Regression tests for projected queries and bounded Explorer summaries."""
 
+import json
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import numpy as np
 import pandas as pd
@@ -9,6 +11,10 @@ import pytest
 
 from telescope_heatmap.binning import filter_observations
 from telescope_heatmap.catalog import read_catalog, summarize_target_systems
+
+
+def search_query(url: str) -> dict:
+    return json.loads(parse_qs(urlsplit(url).query)["searchQuery"][0])
 
 
 @pytest.fixture
@@ -85,6 +91,22 @@ def test_system_summary_keeps_totals_and_limits_text_work(tmp_path: Path, catalo
     assert row["sub_targets"] == "M31-A, M31-B"
     assert row["telescopes"] == "HST, JWST"
     assert row["s_ra"] == 11.0
+    filters = {item["paramName"]: item["values"] for item in search_query(row["mast_url"])["inputText"]}
+    assert filters == {"obs_collection": ["HST", "JWST"], "target_name": ["M31-A", "M31-B"]}
     detailed = source.drop(columns=["pointing_count", "exposure_count"])
     summary, _ = summarize_target_systems(detailed, 1)
     assert summary.iloc[0]["pointing_count"] == summary.iloc[0]["exposure_count"] == 2
+    all_systems, _ = summarize_target_systems(source, 100)
+    assert all_systems.loc[all_systems["target_system"].isna(), "mast_url"].isna().all()
+
+
+def test_system_links_use_bounded_raw_names_instead_of_canonical_labels(catalog_df: pd.DataFrame) -> None:
+    source = pd.concat([catalog_df.iloc[[0]]] * 8, ignore_index=True)
+    names = ["Tile, A", *(f"Tile-{i}" for i in range(7))]
+    source["target_name"] = names
+    source["target_system"] = "Descriptive group label absent from MAST"
+    summary, _ = summarize_target_systems(source, 1)
+    query = search_query(summary.iloc[0]["mast_url"])
+    filters = {item["paramName"]: item["values"] for item in query["inputText"]}
+    assert filters["target_name"] == names[:6]
+    assert summary.iloc[0]["sub_target_count"] == 8

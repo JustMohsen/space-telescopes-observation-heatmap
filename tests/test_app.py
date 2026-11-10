@@ -1,14 +1,25 @@
 """Exercise lazy views using a tiny local catalog rather than live downloads."""
 
+import json
 from pathlib import Path
 from typing import Iterator
 from unittest.mock import Mock
+from urllib.parse import parse_qs, urlsplit
 
 import pandas as pd
+import pyarrow as pa
 import pytest
 from streamlit.testing.v1 import AppTest
 
 import app
+
+
+def table_search_query(data: bytes) -> dict:
+    # Inspect Arrow directly: AppTest's pandas conversion does not support the
+    # dictionary-encoded strings used to keep our catalog queries small.
+    table = pa.ipc.open_stream(data).read_all()
+    url = table.column("mast_url")[0].as_py()
+    return json.loads(parse_qs(urlsplit(url).query)["searchQuery"][0])
 
 
 @pytest.fixture
@@ -16,6 +27,7 @@ def local_catalogs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
     source = pd.DataFrame(
         {
             "obs_collection": ["HST", "JWST"],
+            "obs_id": ["n4qf18090", "jw01442-o001_t001_nircam_f322w2-grismr-subgrism128"],
             "target_category": ["deep_space", "deep_space"],
             "target_name": ["M31-A", "M31-B"],
             "target_system": ["M31", "M31"],
@@ -36,7 +48,8 @@ def local_catalogs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
     paths = {}
     for name in ("targets", "exposures", "pointings", "calibrations"):
         path = tmp_path / f"{name}.parquet"
-        source.to_parquet(path, index=False)
+        table = source.drop(columns="obs_id") if name == "targets" else source
+        table.to_parquet(path, index=False)
         paths[name] = path
     monkeypatch.setattr(app, "_TABLE_PATHS", paths)
     monkeypatch.setattr(app, "TARGETS_PARQUET_PATH", paths["targets"])
@@ -75,12 +88,18 @@ def test_hidden_views_skip_charts_and_queries(local_catalogs: None, monkeypatch:
     assert not at.exception
     assert not at.get("plotly_chart")
     assert len(at.dataframe) == 2
+    assert all(table_search_query(table.proto.arrow_data.data) for table in at.dataframe)
+    unique_target_query = table_search_query(at.dataframe[-1].proto.arrow_data.data)
+    assert unique_target_query["inputText"][-1]["paramName"] == "target_name"
     assert summary.call_count == 1
     assert binning.call_count == 1
     for catalog_view in ("Telescope Pointings (Visits)", "Individual Exposures", "Instrument Calibrations"):
         at.radio(key="tab3_table_view").set_value(catalog_view).run()
         assert not at.exception
         assert not at.get("plotly_chart")
+        query = table_search_query(at.dataframe[-1].proto.arrow_data.data)
+        assert query["inputText"][-1]["paramName"] == "obs_id"
+        assert query["inputText"][-1]["values"] == ["n4qf18090"]
     at.text_input(key="tab3_search").set_value("missing").run()
     assert not at.exception
     assert not at.dataframe

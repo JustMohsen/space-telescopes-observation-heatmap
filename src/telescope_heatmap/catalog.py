@@ -11,6 +11,8 @@ import pyarrow.compute as pc
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 
+from telescope_heatmap.archive_links import SYSTEM_TARGET_EXAMPLES, mast_search_url
+
 SEARCH_COLUMNS = ("target_name", "target_system", "target_description", "target_classification", "obs_title")
 
 
@@ -99,5 +101,16 @@ def summarize_target_systems(df: pd.DataFrame, max_rows: int) -> tuple[pd.DataFr
     ]
     visible_groups = visible.groupby("target_system", dropna=False, observed=True, sort=False)
     summary["telescopes"] = visible_groups["obs_collection"].agg(lambda s: ", ".join(sorted(s.dropna().unique())))
-    summary["sub_targets"] = visible_groups["target_name"].agg(lambda s: ", ".join(s.dropna().unique()[:6]))
+    examples = visible_groups["target_name"].agg(lambda s: list(s.dropna().unique()[:SYSTEM_TARGET_EXAMPLES]))
+    summary["sub_targets"] = examples.map(", ".join)
+    # Search only the displayed example names: full systems can contain thousands
+    # of aliases/tiles, which would exceed practical URL lengths.
+    summary.insert(
+        0,
+        "mast_url",
+        [
+            mast_search_url(telescopes.split(", "), target_names=names)
+            for telescopes, names in zip(summary["telescopes"], examples.reindex(summary.index), strict=True)
+        ],
+    )
     return summary.reset_index(), system_count

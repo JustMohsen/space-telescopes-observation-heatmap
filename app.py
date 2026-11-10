@@ -17,6 +17,7 @@ _SRC_DIR = Path(__file__).resolve().parent / "src"
 if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
+from telescope_heatmap.archive_links import mast_search_url
 from telescope_heatmap.binning import BinnedSkyMap, compute_healpix_map, filter_observations
 from telescope_heatmap.catalog import SEARCH_COLUMNS, read_catalog, summarize_target_systems
 from telescope_heatmap.config import (
@@ -671,6 +672,7 @@ def main() -> None:
                     columns=(
                         *SEARCH_COLUMNS,
                         "obs_collection",
+                        "obs_id",
                         "target_category",
                         "t_exptime",
                         "pointing_count",
@@ -706,6 +708,10 @@ def main() -> None:
                         "(Saturn + Titan, Jupiter + Io/Europa), survey mosaic tiles (M31, HUDF, GOODS-N), "
                         "or catalog naming aliases—into a single summary row."
                     )
+                    st.caption(
+                        "Search MAST opens archive results for the listed example target names (up to six), "
+                        "rather than every observation in the system."
+                    )
                     st.dataframe(
                         sys_df.head(max_rows),
                         width="stretch",
@@ -713,6 +719,7 @@ def main() -> None:
                         height=350,
                         column_config={
                             "target_system": st.column_config.TextColumn("Target System"),
+                            "mast_url": st.column_config.LinkColumn("MAST images / data", display_text="Search MAST"),
                             "target_category": st.column_config.TextColumn("Category"),
                             "what_is_it": st.column_config.TextColumn("What Is It?"),
                             "telescopes": st.column_config.TextColumn("Telescopes"),
@@ -738,6 +745,22 @@ def main() -> None:
                 else:
                     # Format only the rows actually displayed (not the full filtered table)
                     display_df = display_df.head(max_rows).copy()
+                    display_df["mast_url"] = [
+                        mast_search_url(
+                            [row.get("obs_collection")],
+                            obs_id=row.get("obs_id"),
+                            target_names=[row.get("target_name")],
+                            ra=row.get("s_ra"),
+                            dec=row.get("s_dec"),
+                        )
+                        for row in display_df.to_dict("records")
+                    ]
+                    st.caption(
+                        "View in MAST opens a retained dataset for visits, exposures, and calibrations, "
+                        "or a target-name search for unique targets. Generic field labels use a nearby-sky "
+                        "search within 0.1° across missions. Archive results can extend beyond the app's "
+                        "filters; image previews and public downloads depend on the dataset."
+                    )
                     if "t_exptime" in display_df.columns:
                         display_df["exposure_hours"] = (display_df["t_exptime"] / 3600.0).round(2)
                     if "target_category" in display_df.columns:
@@ -753,6 +776,7 @@ def main() -> None:
                     preferred_cols = [
                         "obs_collection",
                         "target_system",
+                        "mast_url",
                         "target_description",
                         "target_name",
                         "target_category",
@@ -777,6 +801,7 @@ def main() -> None:
                         column_config={
                             "obs_collection": st.column_config.TextColumn("Telescope"),
                             "target_system": st.column_config.TextColumn("Target System"),
+                            "mast_url": st.column_config.LinkColumn("MAST images / data", display_text="View in MAST"),
                             "target_description": st.column_config.TextColumn("What Is It?"),
                             "target_name": st.column_config.TextColumn("Raw Target Name"),
                             "target_category": st.column_config.TextColumn("Category"),
