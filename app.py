@@ -243,11 +243,12 @@ def main() -> None:
     col4.metric("Unique Fixed-Sky Targets", f"{len(filt_tgt):,}")
 
     # --- Visualization & Data Tabs ---
-    tab_3d, tab_2d, tab_data = st.tabs(
+    tab_3d, tab_2d, tab_data, tab_about = st.tabs(
         [
             "🌐 3D Interactive Celestial Sphere",
             "🗺️ 2D All-Sky Projection (Mollweide / Rectangular)",
             "🎯 Targets & Observations Explorer",
+            "🚀 About & Methodology",
         ]
     )
 
@@ -563,6 +564,87 @@ def main() -> None:
                         "s_dec": st.column_config.NumberColumn("Dec (°)", format="%.4f"),
                     },
                 )
+
+    with tab_about:
+        st.header("🚀 Where Have Humanity's Eyes in Space Actually Stared?")
+        st.markdown("""
+            For nearly half a century (**1978–2026**), humanity has launched billion-dollar observatories above Earth's
+            blurring atmosphere to peer into the cosmos. Yet whenever we see a breathtaking image from **Hubble** or
+            **James Webb**, we are looking through a tiny keyhole—often no wider than a grain of sand held at arm's length!
+
+            **That sparked a wild question:**
+            > *If you could paint the entire celestial sphere with every second of exposure time from our greatest space
+            > telescopes, what would humanity's collective portrait of the universe look like? Where do we stare the longest,
+            > what hidden biases shape where astronomers look, and how much of the sky remains untouched?*
+
+            🔗 **Open-Source Repository:** [**github.com/JustMohsen/space-telescopes-observation-heatmap**](https://github.com/JustMohsen/space-telescopes-observation-heatmap)
+            """)
+
+        st.divider()
+
+        abt_col1, abt_col2 = st.columns(2, gap="large")
+        with abt_col1:
+            st.subheader("🛰️ 10 Space Observatories, 48 Years of Discovery")
+            st.markdown("""
+                Rather than downloading petabytes of raw `.fits` image pixels, this project queries **1,837,561 science
+                observation records** directly from the **Mikulski Archive for Space Telescopes (MAST)** at the Space
+                Telescope Science Institute (**STScI**), spanning **10 iconic missions**:
+
+                - **Hubble Space Telescope (`HST`, 1990–2026):** 36 years of UV, optical, and near-IR deep fields, nebulae, and galaxies.
+                - **James Webb Space Telescope (`JWST`, 2022–2026):** Our flagship infrared time machine peering into cosmic dawn and exoplanet atmospheres.
+                - **International Ultraviolet Explorer (`IUE`, 1978–1996):** A 18-year ultraviolet workhorse and pioneer of space spectroscopy.
+                - **Neil Gehrels Swift Observatory (`SWIFT`, 2004–2026):** Rapid-response hunter of gamma-ray bursts, supernovae, and active galaxies.
+                - **GALEX (`2003–2013`), EUVE (`1992–2001`), & FUSE (`1999–2007`):** All-sky and high-resolution ultraviolet explorers.
+                - **Kepler (`KeplerFFI`), K2 (`K2FFI`), & TESS (`2009–2026`):** Planet-hunting photometers staring at hundreds of thousands of stars to catch exoplanet transits.
+                """)
+
+        with abt_col2:
+            st.subheader("🔭 Cool Cosmic Patterns You Can Spot Right Here")
+            st.markdown("""
+                Spin the **3D Celestial Sphere** or switch to the **2D All-Sky Map** and see if you can find these real astrophysical signatures:
+
+                1. **The 60.2° Cosmic Tilt:** Turn on both the **Cyan Ring (Milky Way Disk)** and the **Gold Ring (Solar System Ecliptic)**. Our Solar System orbits tilted at **60.2°** relative to the Milky Way!
+                2. **Why Deep Fields Avoid the Milky Way Zone of Avoidance:** Switch the category filter to **🌌 Deep Space**—notice the dark band along the Galactic Equator ($b = 0^\\circ$). Interstellar dust blocks extragalactic light there, forcing astronomers to look out the **North and South Galactic Poles**!
+                3. **Why Galactic North Has More Observations Than South:** Northern hemisphere ground arrays (*VLA, Keck, Palomar, SDSS, Mauna Kea*) historically discovered the lion's share of targets in the northern sky, which simultaneously faces the **North Galactic Pole** ($b > 0^\\circ$) and the **Virgo Supercluster**!
+                4. **Kepler's Cygnus Footprint & K2's Ecliptic Stepping Stones:** Filter to `KeplerFFI` to see its iconic stare just above the Milky Way plane in Cygnus, or `K2FFI` to see how engineers used solar radiation pressure to balance the spacecraft along the **Gold Ecliptic ring**!
+                """)
+
+        st.divider()
+        st.subheader("🧪 Methodology: How We Tamed 1.84 Million Archive Records")
+
+        meth1, meth2, meth3 = st.columns(3, gap="medium")
+        with meth1:
+            st.markdown("""
+                #### 1. Physics-Aware Deduplication
+                Raw archive catalogs are full of traps that would massively distort a naive heatmap:
+                - **Hubble Mosaic Co-Adds (`HAP-SVM` / `HAP-MVM`):** MAST stores both the individual camera exposures *and* synthetic multi-filter stacks. We strip synthetic co-adds while keeping every physical mosaic tile so exposure time is never double-counted.
+                - **JWST Micro-Shutters & Dichroics:** A single **NIRSpec MSA** pointing opens ~100 micro-shutters simultaneously (creating 100 catalog rows for 1 exposure!), and **MIRI's IFU** splits one beam into 12 sub-bands at once. We collapse simultaneous multi-channel readouts by `(mission, proposal, instrument, timestamp)` so 1 hour of telescope time equals 1 hour!
+                """)
+
+        with meth2:
+            st.markdown("""
+                #### 2. Equal-Area Spherical Math (`HEALPix`)
+                Standard latitude-longitude grids pinch together at the poles, making polar regions look artificially tiny or over-dense.
+                - We use **Astropy (`SkyCoord`)** to transform native Equatorial coordinates $(\\text{RA}, \\text{Dec})$ into **Galactic coordinates** $(l, b)$ centered on **Sagittarius A\\*** $(0^\\circ, 0^\\circ)$.
+                - We then tessellate the sky using **HEALPix (`healpy`)**—the same equal-area spherical pixelation developed for the *WMAP* and *Planck* Cosmic Microwave Background missions—so every single sky cell covers the exact same solid angle ($\\Omega$).
+                """)
+
+        with meth3:
+            st.markdown("""
+                #### 3. 4-Table Normalization & Smart Taxonomy
+                Our offline ETL pipeline compiles four `zstd`-compressed Parquet tables:
+                - **📸 `exposures` (`982,227` rows):** Every physical camera exposure & mosaic tile.
+                - **🧭 `pointings` (`572,766` rows):** Distinct telescope slews/visits.
+                - **🎯 `targets` (`171,473` rows):** Unique targets rolled up into canonical **Target Systems** (so *Saturn*, *Titan*, and *Enceladus* group under `Saturn System`, and `NGC 224` merges with `Andromeda Galaxy (M31)`).
+                - **🔧 `calibrations` (`110,463` rows):** Dark frames, flats, and sky backgrounds (`ECLIPTIC-RA12H`), isolated so they never pollute science maps!
+                """)
+
+        st.divider()
+        st.markdown(
+            "⭐ **Built with Python 3.12, `astroquery.mast`, `astropy`, `healpy`, `plotly`, and `streamlit`.** "
+            "Check out the source code, architecture blueprint, and ETL scripts on "
+            "[**GitHub (`JustMohsen/space-telescopes-observation-heatmap`)**](https://github.com/JustMohsen/space-telescopes-observation-heatmap)!"
+        )
 
 
 if __name__ == "__main__":
