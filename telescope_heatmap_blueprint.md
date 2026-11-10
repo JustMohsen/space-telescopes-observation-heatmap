@@ -1,6 +1,6 @@
 # Space Telescopes Observation Heatmap — Project Blueprint & Plan
 
-> Consolidated from the initial design conversation in [Hubble Observation Heatmap Project.pdf](file:///Users/justmohesn/My%20Drive/Personal%20Projects%20with%20AI/Space%20Telescopes%20Observation%20Heatmap/Hubble%20Observation%20Heatmap%20Project.pdf) and updated with architectural refinements.
+> Consolidated from the initial design conversation in [Hubble Observation Heatmap Project.pdf](file:///Users/justmohesn/My%20Drive/Personal%20Projects%20with%20AI/Space%20Telescopes%20Observation%20Heatmap/Hubble%20Observation%20Heatmap%20Project.pdf) and updated with architectural refinements and Step 1 data exploration findings.
 
 ---
 
@@ -8,7 +8,7 @@
 
 An open-source Python application and interactive web dashboard that visualizes where major space observatories (starting with **Hubble (HST)** and **James Webb (JWST)**, and extensible to **Chandra**, **Spitzer**, **XMM-Newton**, **Euclid**, **Herschel**, **Kepler**, and **TESS**) have pointed throughout their mission lifetimes.
 
-Instead of downloading terabytes of raw astronomical imagery, the project queries observation **metadata catalogs** to build spherical heatmaps showing where humanity's space telescopes have spent the most time—or pointed most frequently.
+Instead of downloading terabytes of raw astronomical imagery, the project queries observation **metadata catalogs** to build spherical heatmaps showing where humanity's space telescopes have spent the most time, pointed most frequently, or observed the most unique targets.
 
 ### Key Capabilities & Interactive Toggles
 - **Spherical & Projected Heatmaps:**
@@ -17,16 +17,19 @@ Instead of downloading terabytes of raw astronomical imagery, the project querie
 - **Interactive Filtering & Display Controls:**
   - **Telescope Selector:** Switch between observatories (`HST`, `JWST`, etc.) or view combined/comparative maps.
   - **Reference Frame Toggle:** Switch between **Galactic Coordinates** $(l, b)$ centered on the Milky Way center $(l = 0^\circ, b = 0^\circ)$ and **Equatorial Coordinates** $(\text{RA}, \text{Dec})$.
-  - **Heatmap Metric Toggle (Duration vs. Pointings):**
-    - **Cumulative Exposure Time (`t_exptime`):** Total seconds/hours the telescope stared at that region of the sky.
-    - **Observation Count (`obs_count`) / Unique Targets (`target_count`):** How frequently the telescope pointed at that region, regardless of how long each exposure lasted.
+  - **Heatmap Metric / Dataset Toggle (Backed by Dedicated Tables):**
+    1. **Exposure Time (`exposures.parquet`):** Cumulative exposure duration (`t_exptime`) across every physical sky tile/exposure, preserving full spatial fidelity across mosaics.
+    2. **Telescope Pointings (`pointings.parquet`):** Counts each physical telescope slew/visit to a sky position, showing how often the telescope moved to point at a region regardless of exposure duration.
+    3. **Unique Targets (`targets.parquet`):** Counts distinct astronomical targets observed in each sky pixel.
   - **Color Scale Toggle:**
-    - **Logarithmic Scale ($\log_{10}$):** Brings out the full structure of the sky so ultra-deep fields (like the Hubble Ultra Deep Field) don't wash out shallower surveys.
-    - **Linear Scale (with optional percentile clipping):** Shows the raw, unscaled concentration of telescope time or pointings.
-  - **Target Classification Filters:** Dynamically include or exclude:
-    - **Solar System Targets:** Moving targets (planets, moons, asteroids, comets) whose sky coordinates depend on observation time rather than fixed deep-space directions.
-    - **Milky Way & Local Group Targets:** Galactic disk pointings ($|b| < 10^\circ$), stellar targets, globular clusters, and major satellite galaxies like the Large/Small Magellanic Clouds (LMC/SMC).
-    - **Deep Space / Extragalactic Targets:** High galactic latitude pointings looking out of the Milky Way into deep extragalactic space.
+    - **Logarithmic Scale ($\log_{10}$):** Brings out the full structure of the sky so ultra-deep fields don't wash out shallower surveys.
+    - **Linear Scale (with optional percentile clipping):** Shows the raw, unscaled concentration of telescope time, pointings, or targets.
+  - **Target Category Filters:** Dynamically include or exclude:
+    - **Solar System:** Moving targets (planets, moons, asteroids, comets, Kuiper Belt objects).
+    - **Exoplanets & Protoplanetary Disks:** Dedicated filter for extrasolar planet transits, direct imaging, and circumstellar disks.
+    - **Milky Way & Local Group:** Galactic disk ($|b| < 10^\circ$), stars, nebulae/ISM, star clusters, and Magellanic Clouds (LMC/SMC).
+    - **Deep Space / Extragalactic:** Galaxies, AGN/quasars, galaxy clusters, supernovae, and cosmological deep fields.
+    - **Calibrations (Optional Separate View):** Stored separately in `calibrations.parquet` so they never pollute science maps but remain inspectable if desired.
 
 ---
 
@@ -34,142 +37,119 @@ Instead of downloading terabytes of raw astronomical imagery, the project querie
 
 | Component | Technology | Role & Justification |
 | :--- | :--- | :--- |
-| **Python & Package Manager** | **Python 3.12** + **`uv`** | `uv` manages both the Python 3.12 installation (replacing `pyenv`/`conda`) and project dependencies/virtualenv via standard `pyproject.toml` and `uv.lock` (replacing `poetry`). |
-| **Version Control** | `git` | Tracks source code and documentation while ignoring large local `.parquet` datasets and virtual environments. |
-| **Data Retrieval** | `astroquery.mast` / `pyvo` (TAP / ADQL) | Queries STScI's Mikulski Archive for Space Telescopes (MAST) filtering server-side for science observations to avoid downloading calibration/engineering rows. |
+| **Python & Package Manager** | **Python 3.12** + **`uv`** | `uv` manages both the Python 3.12 installation and project dependencies/virtualenv via `pyproject.toml` and `uv.lock`. |
+| **Version Control** | `git` + `gh` | Synced with GitHub (`JustMohsen/space-telescopes-observation-heatmap`), ignoring large local `.parquet` datasets. |
+| **Data Retrieval** | `astroquery.mast` | Queries STScI's Mikulski Archive for Space Telescopes (MAST) filtering server-side for `intentType='science'` in resumable time chunks. |
 | **Coordinate Math** | `astropy.coordinates` (`SkyCoord`) | Translates native Equatorial coordinates ($\text{RA}, \text{Dec}$) into Galactic coordinates $(l, b)$ centered on $(0^\circ, 0^\circ)$. |
-| **Spherical Binning** | `healpy` (HEALPix) | Subdivides the sphere into equal-area pixels (`NSIDE` resolution), aggregates exposure times or pointing counts, and interpolates onto a smooth meshgrid for 3D rendering. |
-| **Data Storage & Processing** | `pandas` / `polars` + `pyarrow` | Deduplicates, cleans, and serializes pre-computed datasets into compressed columnar `.parquet` files for millisecond in-memory loading. |
+| **Spherical Binning** | `healpy` (HEALPix) | Subdivides the sphere into equal-area pixels (`NSIDE` resolution), aggregates exposure times, pointing counts, or target counts, and interpolates onto a 3D meshgrid. |
+| **Data Storage & Processing** | `pandas` + `pyarrow` | Cleans, deduplicates, and exports four structured `.parquet` tables (`exposures`, `pointings`, `targets`, `calibrations`). |
 | **Interactive Visualization** | `plotly.graph_objects` / `matplotlib` | Renders interactive 3D globes and 2D projections in the browser (`plotly`), plus static publication-quality Mollweide maps (`matplotlib`). |
-| **Web Application UI** | `streamlit` | Pure-Python reactive web framework that turns `app.py` directly into an interactive browser website without requiring separate HTML/CSS/JS code or a separate repository. |
+| **Web Application UI** | `streamlit` | Pure-Python reactive web framework that turns `app.py` directly into an interactive browser website. |
 
 ---
 
 ## 3. Repository & Folder Structure
 
-Everything—both the offline data pipeline and the interactive website—lives in a single, modular Python repository:
-
 ```text
 Space Telescopes Observation Heatmap/
 ├── .git/                           # Git version control
-├── .gitignore                      # Ignores .venv/, data/*.parquet, __pycache__, .DS_Store
+├── .gitignore                      # Ignores .venv/, data/*.parquet, *.pdf, __pycache__
 ├── .python-version                 # Pins Python 3.12 for uv
 ├── pyproject.toml                  # Project metadata & dependencies
-├── uv.lock                         # Exact locked dependency versions for reproducibility
+├── uv.lock                         # Exact locked dependency versions
 ├── README.md                       # Open-source project overview & usage instructions
 ├── telescope_heatmap_blueprint.md  # Living architecture & implementation roadmap
-├── data/                           # Local raw chunks & final .parquet files (git-ignored)
+├── data/                           # Local raw chunks & output .parquet tables (git-ignored)
+│   ├── chunks/                     # Cached per-window raw MAST downloads
+│   ├── exposures.parquet           # Physical exposures (for Exposure Time heatmap)
+│   ├── pointings.parquet           # Deduplicated telescope visits/slews (for Pointings heatmap)
+│   ├── targets.parquet             # Unique astronomical targets (for Targets heatmap)
+│   └── calibrations.parquet        # Residual calibration observations (kept separate from science)
 ├── scripts/
 │   ├── explore_mast.py             # Step 1: Inspect real MAST columns & target tags
-│   └── run_etl.py                  # Step 2: CLI entrypoint to run the full ETL pipeline
+│   └── run_etl.py                  # Step 2: CLI entrypoint to run the offline ETL pipeline
 ├── src/
 │   └── telescope_heatmap/
 │       ├── __init__.py
 │       ├── config.py               # Constants, paths, & telescope mission definitions
-│       ├── etl.py                  # MAST TAP/API fetching, cleaning, & deduplication
+│       ├── etl.py                  # MAST fetching, cleaning, & 4-table normalization
 │       ├── coordinates.py          # Astropy (RA/Dec -> l, b) & target classification logic
-│       ├── binning.py              # HEALPix spherical binning (time/count, log/linear)
+│       ├── binning.py              # HEALPix spherical binning (time/pointings/targets, log/linear)
 │       └── viz.py                  # 3D Plotly globe & 2D Mollweide chart builders
-├── tests/                          # Unit tests for coordinate math, binning, & deduplication
+├── tests/                          # Unit tests for coordinate math, classification, & deduplication
 └── app.py                          # Streamlit web application entrypoint
 ```
 
 ---
 
-## 4. System Architecture
+## 4. Data Nuances Discovered in Step 1 & Multi-Table Architecture
 
-To prevent slow API queries or server timeouts inside the user interface, the system is strictly separated into an **Offline ETL Pipeline** and an **Online Web App**:
+Inspecting live MAST data for **HST** and **JWST** revealed several crucial archive behaviors that shaped our multi-table ETL design:
+
+### 4.1 Why MAST Has Duplicate/Multi-Row Entries (Physics & Archive Mechanics)
+1. **HST Synthetic Mosaic Stacks (`HAP-SVM`, `HAP-MVM`, and `filters="detection"`):**
+   - When Hubble steps across multiple sky positions in a mosaic (e.g. across the Andromeda Galaxy `M31`), the primary instrument pipelines (`CALWF3`, `CALACS`, `CALSTIS`, `CALCOS`) record **every individual tile pointing and filter exposure** with its true $(\text{RA}, \text{Dec})$ and exposure duration.
+   - However, MAST *also* stores post-processed **Hubble Advanced Products (`HAP-SVM` / `HAP-MVM`)** and synthetic white-light `"detection"` rows that stack multiple filters together and sum their exposure times into a second duplicate entry at the same position.
+   - **How We Handle It:** We exclude synthetic re-stacked products (`provenance_name` in `{'HAP-SVM', 'HAP-MVM', 'HASP', 'HSLA'}` and `filters == 'detection'`) while **keeping every individual physical exposure and mosaic tile pointing** from the primary instrument pipelines. Thus, zero spatial mosaic fidelity is lost, and exposure time is never double-counted.
+2. **JWST Simultaneous Channels (`MIRI/IFU`) & Micro-Shutters (`NIRSpec/MSA`):**
+   - *Note on JWST Optics:* All 18 hexagonal primary mirror segments focus light into a single combined telescope beam—the multiple rows in MAST are not from the 18 mirror segments, but from how JWST's instruments split or sample that focal plane during a single pointing:
+     - **MIRI IFU (12 rows per pointing):** Internal dichroic beam-splitters divide the light from the exact same $3.7'' \times 3.7''$ ($0.001^\circ$) spot on the sky into 4 wavelength channels $\times$ 3 sub-bands simultaneously, creating 12 catalog rows with identical timestamps (`t_min`) and exposure durations (`t_exptime`).
+     - **NIRSpec MSA (100+ rows per pointing):** A grid of microscopic shutters covers a $3.6' \times 3.4'$ ($0.06^\circ$) field of view. During a single deep-field pointing, ~100 shutters open simultaneously to take spectra of 100 galaxies, and MAST saves 1 row per shutter.
+   - **How We Handle It:** Because simultaneous channel/shutter rows share the same `(obs_collection, proposal_id, instrument_name, t_min)` timestamp, collapsing simultaneous sub-band/shutter readouts into a single exposure record preserves the exact sky position and true exposure duration (`t_exptime`) without multiplying 1 hour of telescope time by $12\times$ or $100\times$.
+
+### 4.2 Four Output Tables Produced by the ETL Pipeline
+Instead of forcing one table to serve every purpose, `etl.py` produces four clean Parquet tables:
 
 ```mermaid
-flowchart LR
-    subgraph PhaseA["Phase A: Offline ETL Pipeline (scripts/run_etl.py)"]
-        MAST["MAST Archive\n(TAP / astroquery)"] -->|"Server-side filter:\nintentType='science'\n+ Time Chunks"| Raw["Raw Science\nMetadata"]
-        Raw --> Dedup["Clean & Deduplicate\n(Drop Calibrations,\nDeduplicate Pointings)"]
-        Dedup --> Coords["Coordinate Transform\nRA/Dec -> Galactic (l, b)\n(astropy)"]
-        Coords --> Classify["Multi-Signal Target Tagging\n- Solar System (mtFlag + class + name)\n- Milky Way / Local vs. Deep Space"]
-        Classify --> Parquet[("data/telescope_metadata.parquet\n(Compressed Columnar Store)")]
-    end
-
-    subgraph PhaseB["Phase B: Online Web App (app.py)"]
-        Parquet -->|"@st.cache_data\nIn-Memory Load"| DF["Filtered DataFrame\n(Pandas / Polars)"]
-        UI["Sidebar Controls\n- Telescope\n- Frame (Galactic / Equatorial)\n- Metric (Exposure Time / Count)\n- Scale (Log10 / Linear)\n- Target Type Toggles"] --> DF
-        DF -->|"Bin by NSIDE\n(Weights: Time or Count)"| Healpy["HEALPix Grid &\nSpherical Mesh Interpolation"]
-        Healpy --> Plotly["Interactive 3D Globe &\n2D Mollweide Map (Plotly)"]
-    end
+flowchart TD
+    Raw["Raw MAST Science Query\n(intentType='science')"] --> SplitCal{"Is Calibration?\n(target_classification\nstarts with CALIBRATION)"}
+    SplitCal -->|"Yes"| CalTable[("data/calibrations.parquet\n(Kept separate for inspection)")]
+    SplitCal -->|"No (True Science)"| DropHAP["Drop Synthetic Co-adds\n(HAP-SVM/MVM, filters='detection')\n& Collapse Simultaneous IFU/MSA Channels"]
+    DropHAP --> Coords["Add Galactic (l, b) &\nClassify Target Category:\n- Solar System\n- Exoplanets\n- Milky Way & Local Group\n- Deep Space / Extragalactic"]
+    Coords --> ExpTable[("1. data/exposures.parquet\nEvery physical exposure & mosaic tile\n(Powers Exposure Duration Heatmap)")]
+    Coords --> PtgTable[("2. data/pointings.parquet\nGrouped by visit / telescope slew\n(Powers Pointings Count Heatmap)")]
+    Coords --> TgtTable[("3. data/targets.parquet\nGrouped by unique target_name\n(Powers Unique Targets Heatmap)")]
 ```
 
-### Phase A: Offline ETL Pipeline (`src/telescope_heatmap/etl.py` & `coordinates.py`)
-Runs locally to download, inspect, clean, and pre-compute the static dataset:
-1. **Bulk Science-Only Fetching & Chunking:**
-   - Queries MAST for `obs_collection="HST"` and `"JWST"` (filtering server-side for `intentType="science"` and valid sky coordinates/exposure times so hundreds of thousands of darks, biases, and engineering flats are skipped upfront).
-   - Fetches in time chunks (e.g., 1-year `t_min` MJD intervals) with local checkpoint files so downloads are fast, resilient, and resumable.
-2. **Data Cleaning & Pointing Deduplication:**
-   - Extracts core columns: Observation ID (`obs_id`), Proposal ID (`proposal_id`), Telescope (`obs_collection`), Instrument (`instrument_name`), Right Ascension (`s_ra`), Declination (`s_dec`), Exposure Time (`t_exptime`), Observation Time (`t_min`), Target Name (`target_name`), Target Classification (`target_classification`), and Moving Target Flag (`mtFlag`).
-   - Drops invalid rows (`s_ra`, `s_dec` null, or `t_exptime <= 0`).
-   - **Deduplication:** Ensures multi-product/pipeline rows or duplicate archive entries for the same physical pointing (`obs_id` / overlapping sub-exposures) are deduplicated so neither exposure time nor pointing count is artificially inflated.
-3. **Coordinate Transformation:**
-   - Uses `astropy.coordinates.SkyCoord(ra=..., dec=..., unit="deg", frame="icrs").galactic` to compute Galactic Longitude $l \in [-180^\circ, 180^\circ]$ (or $[0^\circ, 360^\circ]$) and Galactic Latitude $b \in [-90^\circ, 90^\circ]$.
-4. **Multi-Signal Target Classification:**
-   - **Solar System (`is_solar_system`):** Combines three signals (to be refined during exploratory data inspection):
-     1. MAST's moving target boolean flag (`mtFlag == True`).
-     2. `target_classification` keywords (e.g., `SOLAR SYSTEM`, `PLANET`, `COMET`, `ASTEROID`, `SATELLITE`).
-     3. Normalized `target_name` matching known planets, moons, dwarf planets, and minor bodies.
-   - **Milky Way vs. Deep Space (`target_regime` / `is_milky_way`):**
-     1. Geometric Galactic Disk check ($|b| < 10^\circ$, adjustable in ETL or UI).
-     2. Catalog `target_classification` tags (e.g., `STAR`, `ISM`, `GLOBULAR CLUSTER`, `OPEN CLUSTER` vs. `GALAXY`, `AGN`, `QUASAR`, `DEEP FIELD`) and known Local Group hotspots like the Magellanic Clouds (LMC/SMC).
-     3. *Note:* We will inspect the actual unique values of `target_classification` and `target_name` returned by MAST in Step 1 and refine these rules based on real data.
-5. **Storage:**
-   - Exports the clean, unified dataset to `data/telescope_metadata.parquet`.
+1. **`data/exposures.parquet` (Exposure-Level Science Table):**
+   - Contains every distinct physical exposure (including every individual tile in a multi-tile mosaic).
+   - Used when the user selects **Exposure Time** on the heatmap so every tile of a mosaic contributes its exact duration at its exact coordinates.
+2. **`data/pointings.parquet` (Telescope Visit / Slew Table):**
+   - Groups consecutive/simultaneous exposures at the same sky coordinates within a visit into a single telescope pointing event.
+   - Used when the user wants to see **where the telescope moved/pointed most frequently** (`Pointing Count`), along with total visit duration and number of exposures per visit.
+3. **`data/targets.parquet` (Unique Targets Table):**
+   - Aggregates all observations of each unique astronomical target (`(obs_collection, target_name)`), storing its representative coordinates $(\text{RA}, \text{Dec}, l, b)$, target category, total pointings, and cumulative exposure time.
+   - Used when the user toggles **Unique Targets** on the heatmap or inspects the top-observed targets table.
+4. **`data/calibrations.parquet` (Calibration Table):**
+   - Stores observations flagged as `CALIBRATION;...` (or `target_name` calibration standards) separately so they don't bias science maps, while remaining available if the user wants to inspect calibration pointings.
 
-### Phase B: Interactive Web App (`app.py`, `binning.py`, & `viz.py`)
-Serves the exploratory dashboard in the browser (zero HTML/CSS/JS required):
-1. **In-Memory Caching:** Loads `data/telescope_metadata.parquet` once per session using `@st.cache_data`.
-2. **Sidebar Controls:**
-   - **Telescope Select:** `HST`, `JWST`, or `All / Compare`.
-   - **Reference Frame Toggle:** `Galactic (Milky Way Center)` vs. `Equatorial (RA/Dec)`.
-   - **Metric Toggle:**
-     - `Total Exposure Time (hours / seconds)`
-     - `Observation Count (number of pointings)`
-     - `Unique Targets Count`
-   - **Scale Toggle:** `Logarithmic (log10)` vs. `Linear`.
-   - **Target Category Filters:** Checkboxes/toggles for `Solar System`, `Milky Way Disk (|b| < 10°)`, `Local Stellar / LMC & SMC`, and `Deep Space / Extragalactic`.
-3. **Dynamic HEALPix Binning:**
-   - Converts filtered coordinates into HEALPix pixel indices (`healpy.ang2pix`).
-   - Uses `numpy.bincount` weighted by `t_exptime` (for exposure time mode) or unweighted `1.0` (for pointing count mode).
-   - Applies either $\log_{10}(\text{value} + 1)$ or linear scaling based on the user's toggle.
-4. **3D Sphere & 2D Projection Rendering:**
-   - **3D Interactive Globe:** Interpolates the HEALPix map onto a structured $(\text{lon}, \text{lat})$ spherical meshgrid via `healpy` and renders it with `plotly.graph_objects.Surface`, overlaid with a 3D reference vector/marker for the **Galactic Center** $(l=0^\circ, b=0^\circ)$ and the **Galactic Equator** ring.
-   - **2D All-Sky Map:** Renders a flattened Mollweide projection alongside summary stats (total exposure hours, number of pointings, top observed targets under current filters).
+### 4.3 Multi-Category Target Classification (`coordinates.py`)
+Every science row is tagged with both boolean flags and a primary `target_category` enum:
+1. **`solar_system`:** `mtFlag == True` OR `target_classification` / `target_name` matches Solar System bodies (planets, moons, asteroids, comets, KBOs, centaurs), **explicitly excluding** `EXTRA-SOLAR`, `EXOPLANET`, `PROTOPLANETARY`, and `PLANETARY NEBULA`.
+2. **`exoplanet`:** `target_classification` or `obs_title` matches `EXTRA-SOLAR PLANET`, `EXOPLANET`, `PROTOPLANETARY DISK`, or `DEBRIS DISK` (and `mtFlag == False`).
+3. **`milky_way`:** Non-Solar-System, non-Exoplanet targets that either:
+   - Have `target_classification` matching Galactic objects (`STAR`, `ISM`, `NEBULA`, `GLOBULAR CLUSTER`, `OPEN CLUSTER`, `NOVA`, `PULSAR`, `WHITE DWARF`, `BROWN DWARF`, `SUPERNOVA REMANT`), OR
+   - Lie within the Galactic plane ($|b| < 10^\circ$) or Magellanic Clouds (LMC/SMC bounding boxes) when `target_classification` is unclassified/blank.
+4. **`deep_space`:** Extragalactic targets (`GALAXY`, `QUASAR`, `AGN`, `BLAZAR`, `SEYFERTS`, `CLUSTER OF GALAXIES`, `HIGH REDSHIFT`, `SUPERNOVA TYPE IA/II`, `DEEP FIELD`, `BLANK FIELD`) or high-latitude pointings ($|b| \ge 10^\circ$) outside the Milky Way/LMC/SMC.
 
 ---
 
-## 5. Generalizing to Other Space Telescopes
+## 5. Living Implementation Roadmap
 
-Because the ETL normalizes columns into a single Parquet schema, adding more space telescopes only requires adding their query configuration to `config.py` and `etl.py`:
-- **MAST Missions (`astroquery.mast`):** Hubble (`HST`), James Webb (`JWST`), Spitzer, Chandra, Kepler, TESS, GALEX.
-- **ESA Missions (`astroquery.esa`):** XMM-Newton, Herschel, Euclid, Planck, Gaia.
-
----
-
-## 6. Living Implementation Roadmap
-
-As we build and explore the actual catalog data, we will update this section directly so this file remains our single source of truth.
-
-- [x] **Step 0: Repository & Environment Setup (`uv` + Python 3.12 + Git)**
-  - Installed `uv` (0.13.7), pinned Python 3.12 (`3.12.15`), initialized Git (`git init`), created `.gitignore` and `pyproject.toml`, installed and locked all 63 dependencies in `uv.lock`, and scaffolded the `src/telescope_heatmap/` package layout.
-- [ ] **Step 1: Data Exploration & Prototype Query (`scripts/explore_mast.py`)**
-  - Run a small sample query against MAST for `HST` and `JWST` to inspect available columns (`intentType`, `mtFlag`, `target_classification`, `s_ra`, `s_dec`, `t_exptime`, `obs_id`), row counts, and duplicate patterns.
-- [ ] **Step 2: Offline ETL Pipeline (`etl.py` & `coordinates.py`)**
-  - Implement chunked/resumable data fetching for HST and JWST.
-  - Implement science filtering and pointing deduplication.
-  - Implement `astropy` Galactic coordinate transformation $(l, b)$.
-  - Implement and validate Solar System, Milky Way, and Deep Space classification rules using insights from Step 1.
-  - Export `data/telescope_metadata.parquet` and print a data summary report.
-- [ ] **Step 3: Core Binning & Static Visualization (`binning.py` & `viz.py`)**
-  - Implement `healpy` binning supporting both **Exposure Time** and **Pointing Count** metrics, and both **Log** and **Linear** scales.
-  - Generate static 2D Mollweide projection heatmaps (`matplotlib`) to verify coordinate orientation ($l=0^\circ, b=0^\circ$ at center).
-- [ ] **Step 4: Interactive Streamlit Web App (`app.py`)**
-  - Build the Streamlit UI with all dropdowns and toggles.
-  - Build the interactive 3D Plotly globe (with Galactic Center marker & Galactic Plane ring) and 2D projection tab.
-- [ ] **Step 5: Documentation & Polish**
-  - Add unit tests (`tests/`), usage instructions, and static preview maps in `README.md`.
+- [x] **Step 0: Repository & Environment Setup (`uv` + Python 3.12 + Git + GitHub)**
+  - Installed `uv` (`0.13.7`), pinned Python 3.12 (`3.12.15`), initialized Git, created GitHub repository [JustMohsen/space-telescopes-observation-heatmap](https://github.com/JustMohsen/space-telescopes-observation-heatmap), and installed all 63 dependencies.
+- [x] **Step 1: Data Exploration & Prototype Query (`scripts/explore_mast.py`)**
+  - Explored 1-month samples and full-mission counts for HST & JWST; identified HST `HAP` mosaic co-adds, JWST simultaneous IFU/MSA rows, residual `CALIBRATION` targets, and the `EXTRA-SOLAR PLANET` classification pattern.
+- [x] **Step 2: Offline ETL Pipeline (`coordinates.py`, `etl.py`, & `scripts/run_etl.py`)**
+  - Implemented Galactic coordinate transformation $(l, b)$ and 4-category target classification (`solar_system`, `exoplanet`, `milky_way`, `deep_space`) in `coordinates.py`.
+  - Implemented resumable chunked MAST downloader and multi-table builder (`exposures.parquet`, `pointings.parquet`, `targets.parquet`, `calibrations.parquet`) in `etl.py`.
+  - Added unit tests in `tests/test_etl_and_coordinates.py` and verified on Jan 2023 HST + JWST data (`8,175` raw rows $\to$ `1,849` physical exposures, `885` telescope pointings, `387` unique targets, and `159` calibration rows).
+- [x] **Step 3: Core Binning & Static Visualization (`binning.py` & `viz.py`)**
+  - Implemented `healpy` binning supporting **Exposure Time**, **Pointing Count**, and **Target Count** metrics across **Log** and **Linear** scales (`binning.py`).
+  - Implemented interactive 3D Plotly globe, 2D all-sky projection, and static Matplotlib Mollweide `.png` export (`viz.py`), tested in `tests/test_binning_and_viz.py`.
+- [x] **Step 4: Interactive Streamlit Web App (`app.py`)**
+  - Built the Streamlit UI with all dropdowns and toggles (Telescope selector supporting HST, JWST, FUSE, EUVE, KeplerFFI, K2FFI, etc.; Reference Frame; Metric/Table; Scale; and Target Categories including Exoplanets).
+  - Built the interactive 3D Plotly globe (with Galactic Center marker & Galactic Plane ring), 2D projection tab, and Top Targets & Calibrations viewer.
+- [x] **Step 5: Full Backfill, Documentation & Polish**
+  - Backfilled the complete mission histories (`1978–2026`, `1,837,561` raw science records) across all 10 space observatories (`HST`, `JWST`, `IUE`, `SWIFT`, `GALEX`, `EUVE`, `FUSE`, `KeplerFFI`, `TESS`, `K2FFI`) into `zstd`-compressed Parquet tables (`982,227` exposures, `572,766` pointings, `171,473` unique targets, `110,463` calibrations).
+  - Audited and hardened multi-tier target classification and `target_system` canonical rollups, added two-knob observation date range sliders (`1978–2026`), and configured `pre-commit` hooks (`isort`, `black`, `mypy`).
