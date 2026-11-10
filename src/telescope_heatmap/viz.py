@@ -235,7 +235,7 @@ def build_3d_globe_figure(
                 mode="lines+markers+text",
                 line=dict(color=gc_col, width=7),
                 marker=dict(size=[7, 11], color=[gc_col, gc_col], symbol=["circle", "diamond"]),
-                text=["", "★ Galactic Center (Sgr A*)"],
+                text=["", "Galactic Center (Sgr A*)"],
                 textposition="top center",
                 textfont=dict(color=gc_col, size=12),
                 name="Galactic Center (l=0°, b=0°)",
@@ -279,11 +279,11 @@ def build_3d_globe_figure(
                 mode="lines+markers+text",
                 line=dict(color=ec_col, width=7),
                 marker=dict(size=[7, 11], color=[ec_col, ec_col], symbol=["circle", "diamond"]),
-                text=["", "☀ Vernal Equinox (λ=0°, β=0°)"],
+                text=["", "Vernal Equinox (λ=0°, β=0°)"],
                 textposition="top center",
                 textfont=dict(color=ec_col, size=12),
                 name="Solar System Origin / Vernal Equinox (0°, 0°)",
-                hovertemplate="<b>Solar System / Ecliptic Origin (Vernal Equinox ♈)</b><br>λ = 0.0°, β = 0.0° (RA=0°, Dec=0°)<extra></extra>",
+                hovertemplate="<b>Solar System / Ecliptic Origin (Vernal Equinox)</b><br>λ = 0.0°, β = 0.0° (RA=0°, Dec=0°)<extra></extra>",
             )
         )
 

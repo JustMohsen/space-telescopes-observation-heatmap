@@ -107,10 +107,11 @@ _MILKY_WAY_CLASS_RE = re.compile(
 
 _MILKY_WAY_TITLE_RE = re.compile(
     r"\b(?:STAR|STARS|STELLAR|BROWN\s+DWARFS?|WHITE\s+DWARFS?|DWARF\s+NOVA|CATACLYSMIC|"
-    r"INTERACTING\s+BINARY|RS\s+CVN|PULSAR|NEUTRON\s+STAR|PROTOSTARS?|CRAB\s+NEBULA|"
+    r"INTERACTING\s+BINARY|RS\s+CVN|PULSAR|NEUTRON\s+STAR|PROTOSTARS?|CRAB\s+NEBULA|ORION\s+NEBULA|"
     r"PLANETARY\s+NEBULA|SUPERNOVA\s+REMNANT|INTERSTELLAR\s+MEDIUM|INTERSTELLAR\s+DUST|"
     r"GALACTIC\s+HALOS?|GALACTIC\s+FOUNTAIN|HIGH-VELOCITY\s+CLOUDS?|GLOBULAR\s+CLUSTER|"
-    r"OPEN\s+CLUSTER|MOLECULAR\s+CLOUDS?|HOT-STAR\s+WINDS|CHROMOSPHERIC|CORONA)\b",
+    r"OPEN\s+CLUSTER|MOLECULAR\s+CLOUDS?|HOT-STAR\s+WINDS|CHROMOSPHERIC|CORONA|"
+    r"MAGELLANIC\s+CLOUD|\bLMC\b|\bSMC\b|30\s*DORADUS|TARANTULA\s+NEBULA)\b",
     re.IGNORECASE,
 )
 
@@ -118,7 +119,7 @@ _DEEP_SPACE_CLASS_RE = re.compile(
     r"GALAX(?:Y|IES)|QUASAR|QSO|\bAGN\b|BLAZAR|SEYFERT|LINER|STARBURST|"
     r"CLUSTER\s+OF\s+GALAXIES|CLUSTERS\s+OF\s+GALAXIES|GALAXY\s+CLUSTER|HIGH[- ]REDSHIFT|"
     r"EXT-STAR|SUPERNOVA(?:E|\s+TYPE|\b)(?!\s*REMNANT)|GRAVITATIONAL\s+LENS|DEEP\s+FIELD|BLANK\s+FIELD|"
-    r"PARALLEL\s+FIELD|HIGH\s+LATITUDE\s+FIELD|DAMPED\s+LYMAN|INTERGALACTIC|COSMOLOG",
+    r"HIGH\s+LATITUDE\s+FIELD|DAMPED\s+LYMAN|INTERGALACTIC|COSMOLOG",
     re.IGNORECASE,
 )
 
@@ -137,7 +138,7 @@ _DEEP_SPACE_TITLE_RE = re.compile(
     r"COSMIC\s+WEB|EARLY\s+UNIVERSE|COSMIC\s+DAWN|REDSHIFT\s+FRONTIER|REIONIZATION|"
     r"HIGH-?Z|HIGH[- ]REDSHIFT|PROTO-?CLUSTER|INTRAGROUP|"
     r"CLUSTERS\s+OF\s+GALAXIES|LENSED|GRAVITATIONAL\s+LENS|HUBBLE\s+SEQUENCE|"
-    r"SUPERNOVA(?:E|\b)(?!\s*REMNANT)|STARBURST|PURE\s+PARALLEL|PANORAMIC|CEERS|PRIMER|FRESCO|CANUCS|NGDEEP|GLIMPSE",
+    r"SUPERNOVA(?:E|\b)(?!\s*REMNANT)|STARBURST|PANORAMIC|CEERS|PRIMER|FRESCO|CANUCS|NGDEEP|GLIMPSE",
     re.IGNORECASE,
 )
 
@@ -255,7 +256,7 @@ def classify_targets(df: pd.DataFrame, galactic_disk_lat_deg: float = GALACTIC_D
     is_deep_explicit = remaining & (has_deep_class | has_deep_title)
     is_mw_explicit = remaining & (has_mw_class | has_mw_title)
 
-    # Geometric fallback ONLY for rows lacking explicit classification, catalog match, and title match
+    # Geometric fallback for rows lacking explicit classification, plus Magellanic Cloud membership
     still_undecided = remaining & (~is_deep_explicit) & (~is_mw_explicit)
     gal_l = out["gal_l"].to_numpy(dtype=np.float64)
     gal_b = out["gal_b"].to_numpy(dtype=np.float64)
@@ -267,9 +268,13 @@ def classify_targets(df: pd.DataFrame, galactic_disk_lat_deg: float = GALACTIC_D
     in_smc = (
         (gal_l >= SMC_L_RANGE[0]) & (gal_l <= SMC_L_RANGE[1]) & (gal_b >= SMC_B_RANGE[0]) & (gal_b <= SMC_B_RANGE[1])
     )
+    is_background_agn = t_class.str.contains(
+        r"QUASAR|QSO|\bAGN\b|BLAZAR|SEYFERT|CLUSTER\s+OF\s+GALAXIES", case=False, regex=True
+    )
+    in_magellanic_clouds = pd.Series(in_lmc | in_smc, index=out.index) & (~is_background_agn)
     in_local_geometric = pd.Series(in_galactic_disk | in_lmc | in_smc, index=out.index)
 
-    is_milky_way = is_mw_explicit | (still_undecided & in_local_geometric)
+    is_milky_way = is_mw_explicit | (remaining & in_magellanic_clouds) | (still_undecided & in_local_geometric)
     is_deep_space = remaining & (~is_milky_way)
 
     categories = np.select(
