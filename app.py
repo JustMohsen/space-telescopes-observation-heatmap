@@ -208,17 +208,19 @@ def ensure_parquet_tables_present() -> None:
 
 
 @st.cache_data(show_spinner=False)
-def load_parquet_tables(mtime_key: float) -> dict[str, pd.DataFrame]:
-    """Load the 4 pre-computed Parquet tables into memory (cached across UI interactions)."""
-    del mtime_key  # Used solely to bust cache when ETL updates the Parquet files
-    return {
-        "exposures": pd.read_parquet(EXPOSURES_PARQUET_PATH) if EXPOSURES_PARQUET_PATH.exists() else pd.DataFrame(),
-        "pointings": pd.read_parquet(POINTINGS_PARQUET_PATH) if POINTINGS_PARQUET_PATH.exists() else pd.DataFrame(),
-        "targets": pd.read_parquet(TARGETS_PARQUET_PATH) if TARGETS_PARQUET_PATH.exists() else pd.DataFrame(),
-        "calibrations": (
-            pd.read_parquet(CALIBRATIONS_PARQUET_PATH) if CALIBRATIONS_PARQUET_PATH.exists() else pd.DataFrame()
-        ),
+def load_parquet_table(name: str, mtime_key: float) -> pd.DataFrame:
+    """Load a single Parquet table on demand to keep RAM footprint minimal (< 450 MB)."""
+    del mtime_key  # Cache key to refresh when data files update
+    path_map = {
+        "targets": TARGETS_PARQUET_PATH,
+        "exposures": EXPOSURES_PARQUET_PATH,
+        "pointings": POINTINGS_PARQUET_PATH,
+        "calibrations": CALIBRATIONS_PARQUET_PATH,
     }
+    target_path = path_map.get(name)
+    if target_path is None or not target_path.exists():
+        return pd.DataFrame()
+    return pd.read_parquet(target_path)
 
 
 def main() -> None:
@@ -237,21 +239,20 @@ def main() -> None:
 
     ensure_parquet_tables_present()
 
-    if not EXPOSURES_PARQUET_PATH.exists():
+    if not TARGETS_PARQUET_PATH.exists():
         st.warning(
             "No pre-computed Parquet tables found in `data/`. "
             "Run `uv run python scripts/run_etl.py` first to populate observation metadata."
         )
         return
 
-    mtime_key = EXPOSURES_PARQUET_PATH.stat().st_mtime
-    tables = load_parquet_tables(mtime_key)
-    exposures_df = tables["exposures"]
-    pointings_df = tables["pointings"]
-    targets_df = tables["targets"]
-    calibrations_df = tables["calibrations"]
+    mtime_key = TARGETS_PARQUET_PATH.stat().st_mtime
+    targets_df = load_parquet_table("targets", mtime_key)
+    if targets_df.empty:
+        st.warning("Observation catalog is empty.")
+        return
 
-    available_missions = sorted(exposures_df["obs_collection"].dropna().unique().tolist())
+    available_missions = sorted(targets_df["obs_collection"].dropna().unique().tolist())
 
     # --- Main Left Sidebar (Controls 3D & 2D Fixed-Sky Heatmaps) ---
     with st.sidebar:
@@ -279,9 +280,9 @@ def main() -> None:
         st.markdown('<div class="apple-section-label">Observation Time Period</div>', unsafe_allow_html=True)
         mjd_epoch = date(1858, 11, 17)
         mission_exp_sub = (
-            exposures_df[exposures_df["obs_collection"].isin(selected_missions)]
-            if selected_missions and not exposures_df.empty
-            else exposures_df
+            targets_df[targets_df["obs_collection"].isin(selected_missions)]
+            if selected_missions and not targets_df.empty
+            else targets_df
         )
         if not mission_exp_sub.empty and "t_min" in mission_exp_sub.columns:
             min_mjd_val = float(mission_exp_sub["t_min"].min())
@@ -326,12 +327,6 @@ def main() -> None:
                 "**Unique Targets** counts distinct astronomical targets observed in each sky cell."
             ),
         )
-        metric_map = {
-            "Exposure Duration (Hours)": ("exposure_hours", exposures_df),
-            "Telescope Pointings (Visits)": ("pointing_count", pointings_df),
-            "Unique Targets Count": ("target_count", targets_df),
-        }
-        metric_key, active_source_df = metric_map[metric_choice]
 
         scale_choice = st.radio(
             "Color Scale",
@@ -402,21 +397,33 @@ def main() -> None:
     if active_theme not in ("light", "dark"):
         active_theme = "dark"
 
-    # Filter fixed-sky science tables for KPI cards and active heatmap
-    filt_exp = filter_observations(exposures_df, selected_missions, selected_heatmap_categories, mjd_range=mjd_range)
-    filt_ptg = filter_observations(pointings_df, selected_missions, selected_heatmap_categories, mjd_range=mjd_range)
-    filt_tgt = filter_observations(targets_df, selected_missions, selected_heatmap_categories, mjd_range=mjd_range)
+    # Top KPI Summary Metrics computed from targets_df (instant, low RAM)
+    filt_kpi = filter_observations(targets_df, selected_missions, selected_heatmap_categories, mjd_range=mjd_range)
+    total_hours = filt_kpi["t_exptime"].sum() / 3600.0 if not filt_kpi.empty else 0.0
+    total_pointings = int(filt_kpi["pointing_count"].sum()) if not filt_kpi.empty else 0
+    total_exposures = int(filt_kpi["exposure_count"].sum()) if not filt_kpi.empty else 0
+    total_targets = len(filt_kpi)
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Fixed-Sky Exposure Time", f"{total_hours:,.1f} hrs")
+    col2.metric("Telescope Pointings (Visits)", f"{total_pointings:,}")
+    col3.metric("Physical Exposures", f"{total_exposures:,}")
+    col4.metric("Unique Fixed-Sky Targets", f"{total_targets:,}")
+
+    # Load ONLY the table needed for the active heatmap metric
+    if metric_choice == "Exposure Duration (Hours)":
+        active_source_df = load_parquet_table("exposures", mtime_key)
+        metric_key = "exposure_hours"
+    elif metric_choice == "Telescope Pointings (Visits)":
+        active_source_df = load_parquet_table("pointings", mtime_key)
+        metric_key = "pointing_count"
+    else:
+        active_source_df = targets_df
+        metric_key = "target_count"
+
     filt_active = filter_observations(
         active_source_df, selected_missions, selected_heatmap_categories, mjd_range=mjd_range
     )
-
-    # Top KPI Summary Metrics (Fixed-Sky Heatmap Selection)
-    col1, col2, col3, col4 = st.columns(4)
-    total_hours = filt_exp["t_exptime"].sum() / 3600.0 if not filt_exp.empty else 0.0
-    col1.metric("Fixed-Sky Exposure Time", f"{total_hours:,.1f} hrs")
-    col2.metric("Telescope Pointings (Visits)", f"{len(filt_ptg):,}")
-    col3.metric("Physical Exposures", f"{len(filt_exp):,}")
-    col4.metric("Unique Fixed-Sky Targets", f"{len(filt_tgt):,}")
 
     # --- Visualization & Data Tabs ---
     tab_3d, tab_2d, tab_data, tab_about = st.tabs(
@@ -448,7 +455,7 @@ def main() -> None:
                 show_ecliptic_plane=show_ecliptic_plane,
                 theme=active_theme,
             )
-            st.plotly_chart(fig_3d, use_container_width=True)
+            st.plotly_chart(fig_3d, width="stretch")
             st.caption(
                 "Drag to rotate the 3D sphere, scroll to zoom, and hover over any region to inspect its "
                 "coordinates, cumulative exposure or pointings, and top target names. Toggle the Milky Way "
@@ -473,7 +480,7 @@ def main() -> None:
                 show_ecliptic_plane=show_ecliptic_plane,
                 theme=active_theme,
             )
-            st.plotly_chart(fig_2d, use_container_width=True)
+            st.plotly_chart(fig_2d, width="stretch")
 
             if st.button("Generate High-Res Mollweide Sky Map (.png)"):
                 out_png = DATA_DIR / "mollweide_preview.png"
@@ -554,17 +561,16 @@ def main() -> None:
                 base_df = filter_observations(targets_df, selected_missions, tab3_categories, mjd_range=tab3_mjd_range)
                 header_label = "Unique Targets"
             elif table_view == "Telescope Pointings (Visits)":
-                base_df = filter_observations(
-                    pointings_df, selected_missions, tab3_categories, mjd_range=tab3_mjd_range
-                )
+                tab3_ptg_df = load_parquet_table("pointings", mtime_key)
+                base_df = filter_observations(tab3_ptg_df, selected_missions, tab3_categories, mjd_range=tab3_mjd_range)
                 header_label = "Telescope Pointings (Visits)"
             elif table_view == "Individual Exposures":
-                base_df = filter_observations(
-                    exposures_df, selected_missions, tab3_categories, mjd_range=tab3_mjd_range
-                )
+                tab3_exp_df = load_parquet_table("exposures", mtime_key)
+                base_df = filter_observations(tab3_exp_df, selected_missions, tab3_categories, mjd_range=tab3_mjd_range)
                 header_label = "Individual Exposures"
             else:
-                base_df = filter_observations(calibrations_df, selected_missions, None, mjd_range=tab3_mjd_range)
+                tab3_cal_df = load_parquet_table("calibrations", mtime_key)
+                base_df = filter_observations(tab3_cal_df, selected_missions, None, mjd_range=tab3_mjd_range)
                 header_label = "Instrument Calibration Observations"
 
             display_df = base_df.copy()
@@ -658,7 +664,7 @@ def main() -> None:
                 )
                 st.dataframe(
                     sys_df.head(max_rows),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                     height=350,
                     column_config={
@@ -717,7 +723,7 @@ def main() -> None:
                 cols_to_show = [c for c in preferred_cols if c in display_df.columns]
                 st.dataframe(
                     display_df[cols_to_show].head(max_rows),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                     height=440,
                     column_config={
