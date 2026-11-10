@@ -155,11 +155,12 @@ def sample_healpix_on_grid(
 ) -> dict[str, np.ndarray]:
     """Sample a BinnedSkyMap onto a structured (lon, lat) grid and 3D unit sphere (x, y, z).
 
-    Automatically scales angular mesh resolution with `sky_map.nside` when `n_lon`/`n_lat` are omitted
-    so high NSIDE settings (128, 256) render with crisp sub-degree pixels.
+    Automatically scales angular mesh resolution with `sky_map.nside` when `n_lon`/`n_lat` are omitted,
+    and forward-splats populated HEALPix cells onto their enclosing 2x2 grid quad so isolated pointings
+    (e.g. JWST deep fields) are never lost between vertices or diluted by background quad corners.
     """
     if n_lon is None:
-        n_lon = min(max(360, sky_map.nside * 6), 1080)
+        n_lon = min(max(480, sky_map.nside * 8), 1080)
     if n_lat is None:
         n_lat = n_lon // 2
 
@@ -171,9 +172,32 @@ def sample_healpix_on_grid(
     phi_grid = np.radians(lon_grid % 360.0)
     pix_grid = hp.ang2pix(sky_map.nside, theta_grid, phi_grid)
 
-    raw_grid = sky_map.raw_map[pix_grid]
-    display_grid = sky_map.display_map[pix_grid]
-    target_grid = sky_map.target_labels[pix_grid]
+    raw_grid = sky_map.raw_map[pix_grid].copy()
+    display_grid = sky_map.display_map[pix_grid].copy()
+    target_grid = sky_map.target_labels[pix_grid].copy()
+
+    # Forward-splat populated HEALPix cells onto their enclosing 2x2 mesh quad so every populated
+    # sky cell forms at least one complete, un-diluted quad face on the 3D surface and 2D heatmap.
+    pop_pix = np.where(np.isfinite(sky_map.display_map))[0]
+    if pop_pix.size > 0:
+        pop_pix = pop_pix[np.argsort(sky_map.display_map[pop_pix])]
+        theta_p, phi_p = hp.pix2ang(sky_map.nside, pop_pix)
+        lat_p = 90.0 - np.degrees(theta_p)
+        lon_p = ((np.degrees(phi_p) + 180.0) % 360.0) - 180.0
+        i0 = np.clip(np.searchsorted(lat_1d, lat_p) - 1, 0, n_lat - 2)
+        j0 = np.clip(np.searchsorted(lon_1d, lon_p) - 1, 0, n_lon - 2)
+        new_disp = sky_map.display_map[pop_pix]
+        new_raw = sky_map.raw_map[pop_pix]
+        new_lbl = sky_map.target_labels[pop_pix]
+        for di in (0, 1):
+            for dj in (0, 1):
+                ii = i0 + di
+                jj = j0 + dj
+                cur = display_grid[ii, jj]
+                overwrite = np.isnan(cur) | (new_disp >= cur)
+                display_grid[ii[overwrite], jj[overwrite]] = new_disp[overwrite]
+                raw_grid[ii[overwrite], jj[overwrite]] = new_raw[overwrite]
+                target_grid[ii[overwrite], jj[overwrite]] = new_lbl[overwrite]
 
     # 3D unit sphere Cartesian coordinates with (lon=0, lat=0) pointing along +X
     lat_rad = np.radians(lat_grid)

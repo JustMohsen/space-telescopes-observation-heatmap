@@ -359,7 +359,7 @@ def build_2d_allsky_figure(
             z=display_grid,
             customdata=np.dstack((raw_grid.astype(object), mesh["target_grid"])),
             colorscale=pal["heatmap_2d_colorscale"],
-            zsmooth="best",
+            zsmooth=False,
             colorbar=dict(
                 title=dict(text=sky_map.colorbar_title, side="right", font=dict(color=pal["text_color"])),
                 tickfont=dict(color=pal["text_color"]),
