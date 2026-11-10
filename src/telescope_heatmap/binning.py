@@ -171,6 +171,9 @@ def sample_healpix_on_grid(
     precedence when several scientific pixels share a preview quad.
     """
     if n_lon is None:
+        # Display-only budget: at most 360 × 181 vertices. Fine and Ultra-Fine
+        # intentionally share this cap to bound Plotly payloads, RAM, and redraw
+        # latency. It never reduces sky_map.nside or changes the scientific bins.
         n_lon = min(max(180, sky_map.nside * 4), 360)
     if n_lat is None:
         n_lat = n_lon // 2 + 1

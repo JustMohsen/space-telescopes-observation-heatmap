@@ -95,6 +95,9 @@ TARGET_CATEGORIES = {
 # on top of existing CALWF3/CALACS/CALSTIS/CALCOS exposures.
 SYNTHETIC_MOSAIC_PROVENANCES = frozenset({"HAP-SVM", "HAP-MVM", "HASP", "HSLA"})
 
+# These select scientific HEALPix bin sizes, not the interactive display density.
+# sample_healpix_on_grid caps rendering separately to keep cloud RAM and latency low;
+# Fine and Ultra-Fine can therefore look similar while retaining different bin values.
 DEFAULT_NSIDE = 64
 NSIDE_OPTIONS = [16, 32, 64, 128, 256]
 GALACTIC_DISK_LAT_DEG = 10.0

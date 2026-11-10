@@ -1,93 +1,89 @@
-# 🔭 Space Telescopes Observation Heatmap
+# Space Telescopes Observation Heatmap
 
-Interactive **3D Celestial Sphere**, **2D Mollweide All-Sky Heatmaps**, and **Target & Observation Explorer** showing where **10 major space observatories** have pointed and stared across their entire mission lifetimes (**1978–2026**).
+Explore where ten space observatories have pointed across a catalog spanning 1978–2026, through an interactive celestial globe, all-sky maps, and an observation explorer.
 
-See [telescope_heatmap_blueprint.md](./telescope_heatmap_blueprint.md) for the full system architecture, technical stack, classification methodology, and implementation roadmap.
+**[Open the live app](https://space-telescopes-observations-heatmap.streamlit.app/)**
 
----
+## Why I built this
 
-## ✨ Supported Space Observatories (Full Mission Catalog: 1978–2026)
+I love maps, graphs, and visualizations, like many other space and science enthusiasts. One day, the Hubble Ultra Deep Field image came across my feed, and I thought: I really want to see a heatmap of where we have been pointing our space telescopes. The story I remember about the first Deep Field image (which I was not sure how accurate it was) is that a proposal came up to point the Hubble Space Telescope at an empty patch of sky that we hadn't studied before to see what was out there, and there was resistance to wasting precious telescope time. Then that first Deep Field image came back and changed our estimate of the number of galaxies in the universe by a factor of 10—aside from the visual beauty and the sense of awe it brought.
+
+So I thought: I want to see where in the sky we have been exploring and pointing our telescopes. I searched a lot and couldn't find anything resembling what I was looking for, so I decided to take on the project of building a heatmap to show where we have been pointing our telescopes. I planned the project and thought about how to represent it, the coordinate systems, and the different targets. Solar System targets are moving targets that don't make sense on a fixed-sky map; we expect galactic targets to be denser along the Galactic Plane, whereas deep-space targets should be denser away from the Galactic Plane to avoid an obstructed view.
+
+A few months later, I finally started working on this. I built it in a few days, which was possible thanks to AI. It is not the most polished, but I am really happy with it and went through many iterations. I also learned that there is a bias toward the Northern Galactic Pole—partly because most historical ground-based sky surveys were built in Earth's northern hemisphere (which faces the North Galactic Pole and the Virgo Supercluster), and we try to point our space telescopes at the same targets for follow-up and comparison, and partly because the Southern Galactic Hemisphere contains the Large and Small Magellanic Clouds, which obstruct a chunk of the southern extragalactic sky. Pointing space telescopes at the same targets observed by ground-based telescopes within their observable regions is also the reason we see a dense belt of observations along the equator in the Equatorial reference frame.
+
+*I built this project with AI assistance: AI wrote most of the text and created the design, while I focused on the technical and scientific structure, iterative cleanup, functional testing, and checking the accuracy of the coordinate systems, telescope information, observation categories, and target classifications.*
+
+## Explore the sky
+
+- **3D celestial sphere:** Rotate and zoom the heatmap, inspect coordinates and target names, and overlay the Galactic and ecliptic planes.
+- **2D all-sky maps:** Explore an interactive map and export a Mollweide PNG.
+- **Three coordinate frames:** Switch between Galactic, equatorial, and ecliptic coordinates.
+- **Three metrics:** Compare exposure duration, telescope visits, and unique catalog targets.
+- **Observation explorer:** Search target names, descriptions, classifications, and program titles; inspect systems, visits, exposures, and calibration observations.
+- **Filters and display:** Choose observatories, observation dates, target categories, grid detail, and light or dark appearance.
+
+Moving Solar System targets appear in the observation explorer and are excluded from the fixed-sky heatmaps. The maps bin recorded pointing locations; colored cells do not represent the exact instrument image footprints.
+
+> **Map detail:** To keep memory use low and updates responsive, interactive maps use a capped display grid. Fine and Ultra-Fine change the underlying HEALPix bins but may look similar. Calculations still use the selected binning; PNG exports use a denser display grid.
+
+## Observatory coverage
 
 | Code | Observatory | Wavelength / Regime | Mission Coverage |
 | :--- | :--- | :--- | :--- |
-| **`HST`** | Hubble Space Telescope | UV / Optical / Near-IR | 1990–2026 |
-| **`JWST`** | James Webb Space Telescope | Near-IR / Mid-IR | 2022–2026 |
-| **`IUE`** | International Ultraviolet Explorer | Ultraviolet | 1978–1996 |
-| **`SWIFT`** | Neil Gehrels Swift Observatory | UV / Optical / X-Ray | 2004–2026 |
-| **`GALEX`** | Galaxy Evolution Explorer | Far-UV / Near-UV | 2003–2013 |
-| **`EUVE`** | Extreme Ultraviolet Explorer | Extreme UV | 1992–2001 |
-| **`FUSE`** | Far Ultraviolet Spectroscopic Explorer | Far-UV | 1999–2007 |
-| **`KeplerFFI`** | Kepler Full-Frame Images | Optical Transit Survey | 2009–2013 |
-| **`TESS`** | Transiting Exoplanet Survey Satellite (FFIs) | Optical All-Sky Survey | 2018–2026 |
-| **`K2FFI`** | K2 Full-Frame Images | Ecliptic Optical Survey | 2014–2018 |
+| `HST` | Hubble Space Telescope | UV / Optical / Near-IR | 1990–2026 |
+| `JWST` | James Webb Space Telescope | Near-IR / Mid-IR | 2022–2026 |
+| `IUE` | International Ultraviolet Explorer | Ultraviolet | 1978–1996 |
+| `SWIFT` | Neil Gehrels Swift Observatory | UV / Optical / X-Ray | 2004–2026 |
+| `GALEX` | Galaxy Evolution Explorer | Far-UV / Near-UV | 2003–2013 |
+| `EUVE` | Extreme Ultraviolet Explorer | Extreme UV | 1992–2001 |
+| `FUSE` | Far Ultraviolet Spectroscopic Explorer | Far-UV | 1999–2007 |
+| `KeplerFFI` | Kepler Full-Frame Images | Optical Transit Survey | 2009–2013 |
+| `TESS` | Transiting Exoplanet Survey Satellite (FFIs) | Optical All-Sky Survey | 2018–2026 |
+| `K2FFI` | K2 Full-Frame Images | Ecliptic Optical Survey | 2014–2018 |
 
----
+Coverage reflects the bundled catalog snapshot and each mission's observation history. It is not a live archive feed. The app uses observation metadata from [MAST](https://archive.stsci.edu/), rather than downloading astronomical image files.
 
-## 🚀 Key Features
+## Run locally
 
-- **🌐 3D Celestial Sphere:** Interactive rotatable 3D globe with explicit **Galactic Center** $(l=0^\circ, b=0^\circ)$ and **Galactic Plane** $(b=0^\circ)$ overlays, hover coordinates, and top observed targets per sky cell.
-- **🗺️ 2D All-Sky Projection:** Interactive Plotly projection + publication-quality **Matplotlib Mollweide** all-sky heatmap with one-click browser `.png` download.
-- **📋 Target & Observation Explorer:**
-  - **Aggregated by Target System (`target_system`):** Groups observations of planetary systems (e.g., *Jupiter System*, *Saturn System*, *TRAPPIST-1*), galaxies, and calibration fields into canonical parent systems.
-  - **Detailed Target & Pointing Breakdown:** Searchable by target name, proposal ID, instrument, category, telescope, and observation date window.
-- **📅 Observation Time Period Sliders:** Filter both the 3D/2D heatmaps and the Target Explorer to any custom date window (`1978–2026`).
-- **🌓 Theme Support:** Full **Dark**, **Light**, and **System** theme adaptation across all 3D globes, 2D Plotly charts, and Matplotlib Mollweide exports.
+Use Python 3.12 or later and [uv](https://docs.astral.sh/uv/):
 
----
-
-## 🛠️ Quickstart
-
-### 1. Environment Setup (`uv` + Python 3.12)
 ```bash
 uv sync --extra dev
-uv run pre-commit install
-```
-
-### 2. Run the Offline MAST ETL Pipeline
-Fetch and build the 4 normalized Parquet tables (`exposures.parquet`, `pointings.parquet`, `targets.parquet`, `calibrations.parquet`):
-```bash
-# Full mission backfill across all 10 space telescopes (resumable, cached in data/chunks/)
-uv run python scripts/run_etl.py --full-mission --workers 6
-
-# Or fetch a specific date range / subset of telescopes
-uv run python scripts/run_etl.py --telescopes HST JWST --start-date 2023-01-01 --end-date 2023-02-01
-```
-
-### 3. Launch the Interactive Web App
-```bash
 uv run streamlit run app.py
 ```
 
-### 4. Code Quality & Tests (`pre-commit`, `isort`, `black`, `mypy`, `pytest`)
+The app downloads the required precomputed Parquet tables from the project's GitHub release on demand. You can explore it without rebuilding the archive catalogs.
+
+<details>
+<summary>Rebuild the catalogs from MAST</summary>
+
+Run the offline ETL pipeline to fetch, classify, and deduplicate archive metadata. Downloads are cached and resumable.
+
 ```bash
+# Full mission backfill for all ten supported observatories
+uv run python scripts/run_etl.py --full-mission --workers 6 \
+  --missions HST JWST IUE SWIFT GALEX EUVE FUSE KeplerFFI K2FFI TESS
+
+# A smaller mission and date selection
+uv run python scripts/run_etl.py --missions HST JWST \
+  --start-date 2023-01-01 --end-date 2023-02-01
+```
+
+The pipeline produces exposure, pointing, target, and calibration Parquet tables.
+
+</details>
+
+## Development
+
+```bash
+uv run pre-commit install
 uv run pre-commit run --all-files
 uv run pytest
 ```
 
-## Performance and Streamlit deployment
+## More about the project
 
-The app renders only the selected tab. Explorer searches and view changes no longer rebuild hidden charts or aggregate hidden tables. Explorer filters persist when switching tabs. This requires Streamlit 1.67 or later; the deployment requirements already pin that version.
-
-Catalog queries project only needed columns and apply mission, category, date, and literal text filters in Arrow before creating pandas frames. Repeated text stays dictionary encoded, and temporary scan buffers use the system allocator. The shared cache holds a small target summary and at most two read-only sky maps, rather than full exposure/pointing tables and twelve serialized maps. Cache invalidation uses each selected file's own modification time and size. Catalogs download on demand, with atomic writes protected across sessions.
-
-Interactive meshes contain at most 65,160 vertices. Numeric hover values stay in numeric arrays, separate from target strings, so Plotly can encode them efficiently. HEALPix calculations still use the full selected resolution; the interactive preview can merge nearby cells visually, with brighter cells taking precedence. The 720 × 360 PNG export provides a denser preview. Ecliptic transformations run in bounded chunks, and Explorer summaries use native reductions with text joins limited to displayed systems. PNG exports use isolated temporary files and serialized rendering across sessions.
-
-Local measurements with the existing release catalogs, Python 3.12, and Streamlit's app test runner:
-
-| Default HST + JWST view | Before | After |
-| :--- | ---: | ---: |
-| First app execution | 11.12 s | 0.90 s |
-| Cached refresh | 10.11 s | 0.058 s |
-| Chart JSON sent per refresh | 21.71 MiB | 3.16 MiB |
-| Process peak memory during default startup | 1,064 MiB | 448 MiB |
-
-A 65-run stress test covering all ten missions, all three metrics and frames, repeated resolution changes through NSIDE 256, PNG export, and every Explorer table peaked at approximately 791 MiB. Scientific pixel values, scaled maps, and target labels matched the original implementation for all nine metric/frame combinations on the real HST/JWST catalogs. These measurements exclude downloads, network transfer, and browser rendering; cloud performance and concurrent-session memory usage will vary.
-
-Reproduce the measurements in a fresh process with local catalogs available:
-
-```bash
-uv run python scripts/profile_app.py
-uv run python scripts/profile_app.py --stress
-```
-
-After pushing changes to the repository connected to Streamlit Community Cloud, reboot the app from its management menu to discard the previous process's caches. Inspect the cloud logs and repeat the interactions that previously crashed to verify the deployed environment.
+- [Architecture and scientific methodology](./telescope_heatmap_blueprint.md)
+- [Performance measurements and deployment notes](./docs/performance.md)
+- [JWST catalog and sky sparsity audit](./docs/jwst-catalog-audit.md)
