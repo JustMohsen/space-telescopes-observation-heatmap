@@ -2198,7 +2198,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.0" },
     { name = "pyvo", specifier = ">=1.5.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.7.0" },
-    { name = "streamlit", specifier = ">=1.39.0" },
+    { name = "streamlit", specifier = ">=1.67.0" },
 ]
 provides-extras = ["dev"]
 

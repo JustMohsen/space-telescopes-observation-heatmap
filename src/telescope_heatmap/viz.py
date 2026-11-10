@@ -6,15 +6,11 @@ from pathlib import Path
 from typing import Any
 
 import astropy.units as u
-import matplotlib
-import matplotlib.pyplot as plt
 import numpy as np
 import plotly.graph_objects as go
 from astropy.coordinates import SkyCoord
 
 from telescope_heatmap.binning import BinnedSkyMap, sample_healpix_on_grid
-
-matplotlib.use("Agg")
 
 
 def _skycoord_to_frame_lonlat(coords: SkyCoord, target_frame: str) -> tuple[np.ndarray, np.ndarray]:
@@ -158,14 +154,9 @@ def build_3d_globe_figure(
 
     lon_label, lat_label, _, _ = _frame_axis_labels(sky_map.frame)
 
-    customdata = np.dstack(
-        (
-            mesh["lon_grid"].astype(object),
-            mesh["lat_grid"].astype(object),
-            raw_grid.astype(object),
-            mesh["target_grid"],
-        )
-    )
+    # Keep numeric arrays numeric so Plotly can use compact typed-array encoding.
+    # Mixing target strings into customdata creates one Python object per number.
+    customdata = np.dstack((mesh["lon_grid"], mesh["lat_grid"], raw_grid))
 
     fig = go.Figure()
 
@@ -180,6 +171,7 @@ def build_3d_globe_figure(
             cmax=vmax,
             colorscale=pal["surface_colorscale"],
             customdata=customdata,
+            text=mesh["target_grid"],
             colorbar=dict(
                 title=dict(text=sky_map.colorbar_title, side="right", font=dict(color=pal["text_color"])),
                 tickfont=dict(color=pal["text_color"]),
@@ -190,7 +182,7 @@ def build_3d_globe_figure(
                 f"<b>{lon_label}:</b> %{{customdata[0]:.1f}}°<br>"
                 f"<b>{lat_label}:</b> %{{customdata[1]:.1f}}°<br>"
                 f"<b>{sky_map.unit_label}:</b> %{{customdata[2]:.3f}}<br>"
-                "<b>Top Targets:</b> %{customdata[3]}<extra></extra>"
+                "<b>Top Targets:</b> %{text}<extra></extra>"
             ),
             lighting=dict(ambient=0.88, diffuse=0.22, specular=0.05, roughness=0.9),
             showscale=True,
@@ -357,7 +349,8 @@ def build_2d_allsky_figure(
             x=mesh["lon_1d"],
             y=mesh["lat_1d"],
             z=display_grid,
-            customdata=np.dstack((raw_grid.astype(object), mesh["target_grid"])),
+            customdata=raw_grid,
+            text=mesh["target_grid"],
             colorscale=pal["heatmap_2d_colorscale"],
             zsmooth=False,
             colorbar=dict(
@@ -367,8 +360,8 @@ def build_2d_allsky_figure(
             hovertemplate=(
                 f"<b>{lon_label}:</b> %{{x:.1f}}°<br>"
                 f"<b>{lat_label}:</b> %{{y:.1f}}°<br>"
-                f"<b>{sky_map.unit_label}:</b> %{{customdata[0]:.3f}}<br>"
-                "<b>Top Targets:</b> %{customdata[1]}<extra></extra>"
+                f"<b>{sky_map.unit_label}:</b> %{{customdata:.3f}}<br>"
+                "<b>Top Targets:</b> %{text}<extra></extra>"
             ),
         )
     )
@@ -472,16 +465,22 @@ def save_static_mollweide_png(
     theme: str = "dark",
 ) -> Path:
     """Render a static publication-quality 2D Mollweide projection using Matplotlib."""
+    from matplotlib import colormaps
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
     pal = _theme_palette(theme)
     mesh = sample_healpix_on_grid(sky_map, n_lon=720, n_lat=360)
     lon_rad = np.radians(-mesh["lon_grid"])
     lat_rad = np.radians(mesh["lat_grid"])
 
-    fig = plt.figure(figsize=(12, 6.5), dpi=160, facecolor=pal["scene_bg"])
+    # An explicit Agg canvas avoids pyplot's process-wide figure registry.
+    fig = Figure(figsize=(12, 6.5), dpi=160, facecolor=pal["scene_bg"])
+    FigureCanvasAgg(fig)
     ax = fig.add_subplot(111, projection="mollweide", facecolor=pal["plot_2d_bg"])
 
     cmap_name = "YlOrRd" if theme == "light" else "inferno"
-    cmap = plt.get_cmap(cmap_name).with_extremes(bad=pal["plot_2d_bg"])
+    cmap = colormaps[cmap_name].with_extremes(bad=pal["plot_2d_bg"])
 
     masked_z = np.ma.masked_invalid(mesh["display_grid"])
     pcm = ax.pcolormesh(lon_rad, lat_rad, masked_z, cmap=cmap, shading="auto")
@@ -496,6 +495,8 @@ def save_static_mollweide_png(
     cbar.ax.xaxis.set_tick_params(color=pal["text_color"], labelcolor=pal["text_color"])
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, bbox_inches="tight", facecolor=fig.get_facecolor())
-    plt.close(fig)
+    try:
+        fig.savefig(output_path, bbox_inches="tight", facecolor=fig.get_facecolor())
+    finally:
+        fig.clear()
     return output_path

@@ -13,7 +13,7 @@ from astropy.coordinates import SkyCoord
 from telescope_heatmap.config import DEFAULT_NSIDE
 
 
-@dataclass
+@dataclass(frozen=True)
 class BinnedSkyMap:
     """Holds both raw physical pixel values, scaled display values, and top target labels on a HEALPix sphere."""
 
@@ -85,9 +85,17 @@ def compute_healpix_map(
             else:
                 ra = df["s_ra"].to_numpy(dtype=np.float64)
                 dec = df["s_dec"].to_numpy(dtype=np.float64)
-                ecl = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame="icrs").barycentrictrueecliptic
-                lon_deg = ((ecl.lon.deg + 180.0) % 360.0) - 180.0
-                lat_deg = ecl.lat.deg
+                # Astropy creates several intermediate coordinate arrays. Transform
+                # bounded chunks rather than all million exposures simultaneously.
+                lon_deg = np.empty(len(df), dtype=np.float64)
+                lat_deg = np.empty(len(df), dtype=np.float64)
+                for start in range(0, len(df), 32_768):
+                    end = start + 32_768
+                    ecl = SkyCoord(
+                        ra=ra[start:end] * u.deg, dec=dec[start:end] * u.deg, frame="icrs"
+                    ).barycentrictrueecliptic
+                    lon_deg[start:end] = ((ecl.lon.deg + 180.0) % 360.0) - 180.0
+                    lat_deg[start:end] = ecl.lat.deg
         else:
             raise ValueError(f"Unsupported coordinate frame: {frame}")
 
@@ -110,16 +118,17 @@ def compute_healpix_map(
             tmp = pd.DataFrame(
                 {
                     "pix": pix_idx,
-                    "target_name": df["target_name"].fillna("Unknown").astype(str).to_numpy(),
+                    "target_name": df["target_name"].astype("string[pyarrow]").fillna("Unknown").reset_index(drop=True),
                     "w": weights,
                 }
             )
             agg_tgt = (
-                tmp.groupby(["pix", "target_name"], as_index=False)
+                tmp.groupby(["pix", "target_name"], as_index=False, observed=True)
                 .agg({"w": "sum"})
                 .sort_values(["pix", "w"], ascending=[True, False])
             )
-            top3 = agg_tgt.groupby("pix")["target_name"].apply(lambda s: ", ".join(s.head(3)))
+            top_rows = agg_tgt.groupby("pix", sort=False).head(3)
+            top3 = top_rows.groupby("pix", sort=False)["target_name"].agg(", ".join)
             target_labels[top3.index.to_numpy()] = top3.to_numpy()
 
     # Apply display scaling
@@ -155,26 +164,29 @@ def sample_healpix_on_grid(
 ) -> dict[str, np.ndarray]:
     """Sample a BinnedSkyMap onto a structured (lon, lat) grid and 3D unit sphere (x, y, z).
 
-    Automatically scales angular mesh resolution with `sky_map.nside` when `n_lon`/`n_lat` are omitted,
-    and forward-splats populated HEALPix cells onto their enclosing 2x2 grid quad so isolated pointings
-    (e.g. JWST deep fields) are never lost between vertices or diluted by background quad corners.
+    Caps interactive previews at 65,160 vertices, independently of the scientific
+    HEALPix resolution. Explicit grid dimensions (e.g. for PNG export) override the cap.
+    Populated cells are forward-splatted onto their enclosing 2x2 grid quad so
+    isolated pointings remain visible between vertices. Brighter cells take
+    precedence when several scientific pixels share a preview quad.
     """
     if n_lon is None:
-        n_lon = min(max(480, sky_map.nside * 8), 1080)
+        n_lon = min(max(180, sky_map.nside * 4), 360)
     if n_lat is None:
-        n_lat = n_lon // 2
+        n_lat = n_lon // 2 + 1
 
-    lon_1d = np.linspace(-180.0, 180.0, n_lon)
-    lat_1d = np.linspace(-90.0, 90.0, n_lat)
+    lon_1d = np.linspace(-180.0, 180.0, n_lon, dtype=np.float32)
+    lat_1d = np.linspace(-90.0, 90.0, n_lat, dtype=np.float32)
     lon_grid, lat_grid = np.meshgrid(lon_1d, lat_1d)
 
-    theta_grid = np.radians(90.0 - lat_grid)
+    # Use float64 angles at the poles to stay within healpy's [0, pi] domain.
+    theta_grid = np.radians(90.0 - lat_grid.astype(np.float64))
     phi_grid = np.radians(lon_grid % 360.0)
     pix_grid = hp.ang2pix(sky_map.nside, theta_grid, phi_grid)
 
-    raw_grid = sky_map.raw_map[pix_grid].copy()
-    display_grid = sky_map.display_map[pix_grid].copy()
-    target_grid = sky_map.target_labels[pix_grid].copy()
+    raw_grid = sky_map.raw_map[pix_grid]
+    display_grid = sky_map.display_map[pix_grid]
+    target_grid = sky_map.target_labels[pix_grid]
 
     # Forward-splat populated HEALPix cells onto their enclosing 2x2 mesh quad so every populated
     # sky cell forms at least one complete, un-diluted quad face on the 3D surface and 2D heatmap.

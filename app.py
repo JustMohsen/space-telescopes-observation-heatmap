@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import sys
+import tempfile
+import threading
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -14,7 +16,8 @@ _SRC_DIR = Path(__file__).resolve().parent / "src"
 if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
-from telescope_heatmap.binning import compute_healpix_map, filter_observations
+from telescope_heatmap.binning import BinnedSkyMap, compute_healpix_map, filter_observations
+from telescope_heatmap.catalog import SEARCH_COLUMNS, read_catalog, summarize_target_systems
 from telescope_heatmap.config import (
     CALIBRATIONS_PARQUET_PATH,
     DATA_DIR,
@@ -180,59 +183,120 @@ def _inject_apple_ui_styles() -> None:
     )
 
 
-def ensure_parquet_tables_present() -> None:
-    """Download pre-computed Parquet tables from GitHub Releases on first cloud boot if missing locally."""
-    required_paths = [
-        TARGETS_PARQUET_PATH,
-        POINTINGS_PARQUET_PATH,
-        CALIBRATIONS_PARQUET_PATH,
-        EXPOSURES_PARQUET_PATH,
-    ]
-    missing = [p for p in required_paths if not p.exists()]
+@st.cache_resource(show_spinner=False)
+def _download_lock() -> threading.Lock:
+    return threading.Lock()
+
+
+@st.cache_resource(show_spinner=False)
+def _export_lock() -> threading.Lock:
+    """Matplotlib rendering must be serialized across concurrent sessions."""
+    return threading.Lock()
+
+
+def ensure_parquet_tables_present(names: tuple[str, ...] = ("targets",)) -> None:
+    """Download only requested tables, with one atomic download per file across sessions."""
+    missing = [name for name in names if not _TABLE_PATHS[name].exists()]
     if not missing:
         return
+    with _download_lock():
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        for name in missing:
+            target_path = _TABLE_PATHS[name]
+            if target_path.exists():
+                continue
+            tmp_path = target_path.with_suffix(".parquet.part")
+            try:
+                with st.spinner(f"Downloading {target_path.name} from GitHub Releases..."):
+                    with requests.get(
+                        f"{GITHUB_RELEASE_BASE_URL}/{target_path.name}",
+                        headers={"User-Agent": "SpaceTelescopeHeatmap/1.0"},
+                        stream=True,
+                        timeout=120,
+                    ) as response:
+                        response.raise_for_status()
+                        with tmp_path.open("wb") as output:
+                            for chunk in response.iter_content(chunk_size=1024 * 1024):
+                                if chunk:
+                                    output.write(chunk)
+                    tmp_path.replace(target_path)
+            except (requests.RequestException, OSError) as exc:
+                tmp_path.unlink(missing_ok=True)
+                st.error(f"Could not download `{target_path.name}` from GitHub Releases: {exc}")
+                st.stop()
 
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    status_box = st.empty()
-    for idx, target_path in enumerate(missing, start=1):
-        url = f"{GITHUB_RELEASE_BASE_URL}/{target_path.name}"
-        tmp_path = target_path.with_suffix(".parquet.part")
-        status_box.info(f"Downloading database ({idx}/{len(missing)}): `{target_path.name}` from GitHub Releases...")
-        try:
-            resp = requests.get(
-                url,
-                headers={"User-Agent": "SpaceTelescopeHeatmap/1.0"},
-                stream=True,
-                timeout=120,
-            )
-            resp.raise_for_status()
-            with open(tmp_path, "wb") as f:
-                for chunk in resp.iter_content(chunk_size=1024 * 1024):
-                    if chunk:
-                        f.write(chunk)
-            tmp_path.replace(target_path)
-        except Exception as exc:
-            if tmp_path.exists():
-                tmp_path.unlink()
-            st.error(f"Could not download `{target_path.name}` from GitHub Releases: {exc}")
-            break
-    status_box.empty()
+
+_TABLE_PATHS = {
+    "targets": TARGETS_PARQUET_PATH,
+    "exposures": EXPOSURES_PARQUET_PATH,
+    "pointings": POINTINGS_PARQUET_PATH,
+    "calibrations": CALIBRATIONS_PARQUET_PATH,
+}
 
 
-@st.cache_data(show_spinner=False)
-def load_parquet_table(name: str, mtime_key: float) -> pd.DataFrame:
-    """Load a single Parquet table on demand to keep RAM footprint minimal (< 450 MB)."""
-    del mtime_key  # Cache key to refresh when data files update
-    path_map = {
-        "targets": TARGETS_PARQUET_PATH,
-        "exposures": EXPOSURES_PARQUET_PATH,
-        "pointings": POINTINGS_PARQUET_PATH,
-        "calibrations": CALIBRATIONS_PARQUET_PATH,
-    }
-    target_path = path_map.get(name)
-    if target_path is None or not target_path.exists():
-        return pd.DataFrame()
-    return pd.read_parquet(target_path)
+def table_version(name: str) -> tuple[int, int]:
+    """Invalidate results using the selected table's own modification time and size."""
+    info = _TABLE_PATHS[name].stat()
+    return info.st_mtime_ns, info.st_size
+
+
+@st.cache_resource(show_spinner=False, max_entries=1)
+def load_target_summary(version: tuple[int, int]) -> pd.DataFrame:
+    """Share only the small, read-only columns needed for mission bounds and KPIs."""
+    del version
+    return read_catalog(
+        TARGETS_PARQUET_PATH,
+        columns=(
+            "obs_collection",
+            "target_category",
+            "t_min",
+            "t_max",
+            "t_exptime",
+            "pointing_count",
+            "exposure_count",
+        ),
+    )
+
+
+@st.cache_resource(show_spinner=False, max_entries=2)
+def cached_sky_map(
+    table_name: str,
+    missions: tuple[str, ...],
+    categories: tuple[str, ...],
+    mjd_range: tuple[float, float],
+    frame: str,
+    metric: str,
+    scale: str,
+    nside: int,
+    version: tuple[int, int],
+) -> BinnedSkyMap | None:
+    """Filter + HEALPix-bin once per unique settings combination (shared by the 3D and 2D tabs)."""
+    del version
+    coord_cols = {
+        "galactic": ("gal_l", "gal_b"),
+        "equatorial": ("s_ra", "s_dec"),
+        "ecliptic": ("s_ra", "s_dec", "ecl_lon", "ecl_lat"),
+    }[frame]
+    filt = read_catalog(
+        _TABLE_PATHS[table_name],
+        columns=(*coord_cols, "target_name", "t_exptime"),
+        telescopes=missions,
+        categories=categories,
+        mjd_range=mjd_range,
+    )
+    if filt.empty:
+        return None
+    sky_map = compute_healpix_map(filt, frame=frame, metric=metric, scale=scale, nside=nside)
+    for values in (sky_map.raw_map, sky_map.display_map, sky_map.target_labels):
+        values.setflags(write=False)
+    return sky_map
+
+
+def _remember_explorer_value(key: str) -> None:
+    """Keep user choices separately from widgets that disappear in hidden tabs."""
+    values = dict(st.session_state.get("explorer_values", {}))
+    values[key] = st.session_state[key]
+    st.session_state["explorer_values"] = values
 
 
 def main() -> None:
@@ -258,8 +322,7 @@ def main() -> None:
         )
         return
 
-    mtime_key = TARGETS_PARQUET_PATH.stat().st_mtime
-    targets_df = load_parquet_table("targets", mtime_key)
+    targets_df = load_target_summary(table_version("targets"))
     if targets_df.empty:
         st.warning("Observation catalog is empty.")
         return
@@ -292,7 +355,7 @@ def main() -> None:
         st.markdown('<div class="apple-section-label">Observation Time Period</div>', unsafe_allow_html=True)
         mjd_epoch = date(1858, 11, 17)
         mission_exp_sub = (
-            targets_df[targets_df["obs_collection"].isin(selected_missions)]
+            targets_df.loc[targets_df["obs_collection"].isin(selected_missions), ["t_min", "t_max"]]
             if selected_missions and not targets_df.empty
             else targets_df
         )
@@ -394,6 +457,7 @@ def main() -> None:
             value=DEFAULT_NSIDE,
             format_func=lambda v: nside_labels.get(v, str(v)),
         )
+        st.caption("Interactive previews use a limited mesh for smooth rotation. PNG exports show more detail.")
         show_galactic_plane = st.checkbox(
             "Show Milky Way Galactic Plane & Center",
             value=(frame_key == "galactic"),
@@ -422,20 +486,13 @@ def main() -> None:
     col3.metric("Physical Exposures", f"{total_exposures:,}")
     col4.metric("Unique Fixed-Sky Targets", f"{total_targets:,}")
 
-    # Load ONLY the table needed for the active heatmap metric
+    # Pick ONLY the table needed for the active heatmap metric
     if metric_choice == "Exposure Duration (Hours)":
-        active_source_df = load_parquet_table("exposures", mtime_key)
-        metric_key = "exposure_hours"
+        active_table, metric_key = "exposures", "exposure_hours"
     elif metric_choice == "Telescope Pointings (Visits)":
-        active_source_df = load_parquet_table("pointings", mtime_key)
-        metric_key = "pointing_count"
+        active_table, metric_key = "pointings", "pointing_count"
     else:
-        active_source_df = targets_df
-        metric_key = "target_count"
-
-    filt_active = filter_observations(
-        active_source_df, selected_missions, selected_heatmap_categories, mjd_range=mjd_range
-    )
+        active_table, metric_key = "targets", "target_count"
 
     # --- Visualization & Data Tabs ---
     tab_3d, tab_2d, tab_data, tab_about = st.tabs(
@@ -444,324 +501,302 @@ def main() -> None:
             "2D All-Sky Map",
             "Target & Observation Explorer",
             "About & Methodology",
-        ]
+        ],
+        key="main_view",
+        on_change="rerun",
     )
+
+    sky_map = None
+    if (tab_3d.open or tab_2d.open) and selected_missions and selected_heatmap_categories:
+        ensure_parquet_tables_present((active_table,))
+        with st.spinner("Building sky map..."):
+            sky_map = cached_sky_map(
+                active_table,
+                tuple(selected_missions),
+                tuple(selected_heatmap_categories),
+                mjd_range,
+                frame_key,
+                metric_key,
+                scale_key,
+                int(nside),
+                table_version(active_table),
+            )
 
     map_title = f"{mission_title} — {metric_choice} [{scale_choice}, {frame_key.capitalize()} Frame]"
 
-    with tab_3d:
-        if filt_active.empty:
-            st.info("No fixed-sky observations match the selected sidebar filters.")
-        else:
-            sky_map = compute_healpix_map(
-                filt_active,
-                frame=frame_key,
-                metric=metric_key,
-                scale=scale_key,
-                nside=nside,
-            )
-            fig_3d = build_3d_globe_figure(
-                sky_map,
-                title=map_title,
-                show_galactic_plane=show_galactic_plane,
-                show_ecliptic_plane=show_ecliptic_plane,
-                theme=active_theme,
-            )
-            st.plotly_chart(fig_3d, width="stretch")
-            st.caption(
-                "Drag to rotate the 3D sphere, scroll to zoom, and hover over any region to inspect its "
-                "coordinates, cumulative exposure or pointings, and top target names. Toggle the Milky Way "
-                "and Ecliptic plane overlays in the sidebar to see how the two planes tilt at 60.2° to each other."
-            )
+    if tab_3d.open:
+        with tab_3d:
+            if sky_map is None:
+                st.info("No fixed-sky observations match the selected sidebar filters.")
+            else:
+                fig_3d = build_3d_globe_figure(
+                    sky_map,
+                    title=map_title,
+                    show_galactic_plane=show_galactic_plane,
+                    show_ecliptic_plane=show_ecliptic_plane,
+                    theme=active_theme,
+                )
+                st.plotly_chart(fig_3d, width="stretch")
+                st.caption(
+                    "Drag to rotate the 3D sphere, scroll to zoom, and hover over any region to inspect its "
+                    "coordinates, cumulative exposure or pointings, and top target names. Toggle the Milky Way "
+                    "and Ecliptic plane overlays in the sidebar to see how the two planes tilt at 60.2° to each other."
+                )
 
-    with tab_2d:
-        if filt_active.empty:
-            st.info("No fixed-sky observations match the selected sidebar filters.")
-        else:
-            sky_map = compute_healpix_map(
-                filt_active,
-                frame=frame_key,
-                metric=metric_key,
-                scale=scale_key,
-                nside=nside,
-            )
-            fig_2d = build_2d_allsky_figure(
-                sky_map,
-                title=map_title,
-                show_galactic_plane=show_galactic_plane,
-                show_ecliptic_plane=show_ecliptic_plane,
-                theme=active_theme,
-            )
-            st.plotly_chart(fig_2d, width="stretch")
+    if tab_2d.open:
+        with tab_2d:
+            if sky_map is None:
+                st.info("No fixed-sky observations match the selected sidebar filters.")
+            else:
+                fig_2d = build_2d_allsky_figure(
+                    sky_map,
+                    title=map_title,
+                    show_galactic_plane=show_galactic_plane,
+                    show_ecliptic_plane=show_ecliptic_plane,
+                    theme=active_theme,
+                )
+                st.plotly_chart(fig_2d, width="stretch")
 
-            if st.button("Generate High-Res Mollweide Sky Map (.png)"):
-                out_png = DATA_DIR / "mollweide_preview.png"
-                save_static_mollweide_png(sky_map, out_png, title=map_title, theme=active_theme)
-                st.image(str(out_png), caption=map_title)
-                with open(out_png, "rb") as png_file:
+                if st.button("Generate High-Res Mollweide Sky Map (.png)"):
+                    with _export_lock(), tempfile.TemporaryDirectory() as export_dir:
+                        out_png = Path(export_dir) / "heatmap.png"
+                        save_static_mollweide_png(sky_map, out_png, title=map_title, theme=active_theme)
+                        png_bytes = out_png.read_bytes()
+                    st.image(png_bytes, caption=map_title)
                     st.download_button(
                         label="Download High-Res PNG",
-                        data=png_file.read(),
+                        data=png_bytes,
                         file_name="space_telescopes_heatmap.png",
                         mime="image/png",
+                        on_click="ignore",
                     )
 
-    with tab_data:
-        filter_col, table_col = st.columns([1.05, 3.45], gap="large")
+    if tab_data.open:
+        with tab_data:
+            explorer_values = st.session_state.get("explorer_values", {})
+            filter_col, table_col = st.columns([1.05, 3.45], gap="large")
 
-        with filter_col:
-            st.markdown('<div class="apple-section-label">Explorer Filters</div>', unsafe_allow_html=True)
-            st.caption("Filter observations across all catalog levels, including Solar System and Calibrations.")
+            with filter_col:
+                st.markdown('<div class="apple-section-label">Explorer Filters</div>', unsafe_allow_html=True)
+                st.caption("Filter observations across all catalog levels, including Solar System and Calibrations.")
 
-            table_view = st.radio(
-                "Catalog Granularity",
-                options=[
+                catalog_views = [
                     "Unique Targets",
                     "Telescope Pointings (Visits)",
                     "Individual Exposures",
                     "Instrument Calibrations",
-                ],
-                index=0,
-                key="tab3_table_view",
-            )
-
-            st.markdown('<div class="apple-section-label">Target Categories</div>', unsafe_allow_html=True)
-            tab3_categories: list[str] = []
-            is_cal_only = table_view.startswith("Instrument Calibrations")
-            for cat_key, cat_label in TARGET_CATEGORIES.items():
-                checked = st.checkbox(
-                    cat_label,
-                    value=True,
-                    key=f"tab3_cat_{cat_key}",
-                    disabled=is_cal_only,
-                )
-                if checked:
-                    tab3_categories.append(cat_key)
-
-            st.markdown('<div class="apple-section-label">Observation Time Period</div>', unsafe_allow_html=True)
-            tab3_date_range = st.slider(
-                "Table Start & End Date",
-                min_value=min_obs_date,
-                max_value=max_obs_date,
-                value=(sel_start_date, sel_end_date),
-                format="YYYY-MM-DD",
-                key="tab3_date_slider",
-                help="Drag both knobs to filter the explorer tables to a specific date range.",
-            )
-            tab3_start_date, tab3_end_date = tab3_date_range
-            tab3_mjd_range: tuple[float, float] = (
-                float((tab3_start_date - mjd_epoch).days),
-                float((tab3_end_date - mjd_epoch).days + 1),
-            )
-
-            search_query = st.text_input(
-                "Search Target / Description / Program",
-                value="",
-                placeholder="e.g. Saturn, WASP, Andromeda, Quasar...",
-                key="tab3_search",
-            )
-
-            max_rows = st.select_slider(
-                "Rows to Display",
-                options=[50, 100, 250, 500, 1000],
-                value=100,
-                key="tab3_max_rows",
-            )
-
-        with table_col:
-            if table_view == "Unique Targets":
-                base_df = filter_observations(targets_df, selected_missions, tab3_categories, mjd_range=tab3_mjd_range)
-                header_label = "Unique Targets"
-            elif table_view == "Telescope Pointings (Visits)":
-                tab3_ptg_df = load_parquet_table("pointings", mtime_key)
-                base_df = filter_observations(tab3_ptg_df, selected_missions, tab3_categories, mjd_range=tab3_mjd_range)
-                header_label = "Telescope Pointings (Visits)"
-            elif table_view == "Individual Exposures":
-                tab3_exp_df = load_parquet_table("exposures", mtime_key)
-                base_df = filter_observations(tab3_exp_df, selected_missions, tab3_categories, mjd_range=tab3_mjd_range)
-                header_label = "Individual Exposures"
-            else:
-                tab3_cal_df = load_parquet_table("calibrations", mtime_key)
-                base_df = filter_observations(tab3_cal_df, selected_missions, None, mjd_range=tab3_mjd_range)
-                header_label = "Instrument Calibration Observations"
-
-            display_df = base_df.copy()
-            if not display_df.empty and search_query.strip():
-                q = search_query.strip()
-                t_match = (
-                    display_df.get("target_name", pd.Series("", index=display_df.index))
-                    .fillna("")
-                    .astype(str)
-                    .str.contains(q, case=False, regex=False)
-                )
-                s_match = (
-                    display_df.get("target_system", pd.Series("", index=display_df.index))
-                    .fillna("")
-                    .astype(str)
-                    .str.contains(q, case=False, regex=False)
-                )
-                d_match = (
-                    display_df.get("target_description", pd.Series("", index=display_df.index))
-                    .fillna("")
-                    .astype(str)
-                    .str.contains(q, case=False, regex=False)
-                )
-                c_match = (
-                    display_df.get("target_classification", pd.Series("", index=display_df.index))
-                    .fillna("")
-                    .astype(str)
-                    .str.contains(q, case=False, regex=False)
-                )
-                o_match = (
-                    display_df.get("obs_title", pd.Series("", index=display_df.index))
-                    .fillna("")
-                    .astype(str)
-                    .str.contains(q, case=False, regex=False)
-                )
-                display_df = display_df[t_match | s_match | d_match | c_match | o_match]
-
-            cat_display_map = {
-                "solar_system": "Solar System",
-                "exoplanet": "Exoplanets & Disks",
-                "milky_way": "Milky Way & Local Group",
-                "deep_space": "Deep Space",
-            }
-
-            # 1. Aggregated Table by Target / System
-            if not is_cal_only and not display_df.empty and "target_system" in display_df.columns:
-                ptg_col = (
-                    display_df["pointing_count"]
-                    if "pointing_count" in display_df.columns
-                    else pd.Series(1, index=display_df.index)
-                )
-                exp_col = (
-                    display_df["exposure_count"]
-                    if "exposure_count" in display_df.columns
-                    else pd.Series(1, index=display_df.index)
-                )
-                tmp_sys = display_df.assign(_ptg_cnt=ptg_col, _exp_cnt=exp_col)
-
-                sys_df = (
-                    tmp_sys.groupby("target_system", dropna=False, as_index=False)
-                    .agg(
-                        target_category=(
-                            "target_category",
-                            lambda s: cat_display_map.get(str(s.iloc[0]), str(s.iloc[0])),
-                        ),
-                        what_is_it=("target_description", "first"),
-                        telescopes=("obs_collection", lambda s: ", ".join(sorted(set(s.dropna().astype(str))))),
-                        exposure_hours=("t_exptime", lambda s: round(float(s.sum()) / 3600.0, 2)),
-                        pointing_count=("_ptg_cnt", "sum"),
-                        exposure_count=("_exp_cnt", "sum"),
-                        sub_target_count=("target_name", "nunique"),
-                        sub_targets=(
-                            "target_name",
-                            lambda s: ", ".join(list(dict.fromkeys(s.dropna().astype(str)))[:6]),
-                        ),
-                        science_program_title=("obs_title", "first"),
-                        gal_l=("gal_l", lambda s: round(float(s.median()), 2)),
-                        gal_b=("gal_b", lambda s: round(float(s.median()), 2)),
-                        s_ra=("s_ra", lambda s: round(float(s.median()), 4)),
-                        s_dec=("s_dec", lambda s: round(float(s.median()), 4)),
-                    )
-                    .sort_values("exposure_hours", ascending=False)
-                    .reset_index(drop=True)
-                )
-
-                st.subheader(f"Aggregated by Target System ({len(sys_df):,} systems)")
-                st.caption(
-                    "Groups observations of the same physical system—such as a planet and its moons "
-                    "(Saturn + Titan, Jupiter + Io/Europa), survey mosaic tiles (M31, HUDF, GOODS-N), "
-                    "or catalog naming aliases—into a single summary row."
-                )
-                st.dataframe(
-                    sys_df.head(max_rows),
-                    width="stretch",
-                    hide_index=True,
-                    height=350,
-                    column_config={
-                        "target_system": st.column_config.TextColumn("Target System"),
-                        "target_category": st.column_config.TextColumn("Category"),
-                        "what_is_it": st.column_config.TextColumn("What Is It?"),
-                        "telescopes": st.column_config.TextColumn("Telescopes"),
-                        "exposure_hours": st.column_config.NumberColumn("Exposure (hrs)", format="%.2f"),
-                        "pointing_count": st.column_config.NumberColumn("Visits"),
-                        "exposure_count": st.column_config.NumberColumn("Exposures"),
-                        "sub_target_count": st.column_config.NumberColumn("Sub-Targets"),
-                        "sub_targets": st.column_config.TextColumn("Included Target Names"),
-                        "science_program_title": st.column_config.TextColumn("Science Program"),
-                        "gal_l": st.column_config.NumberColumn("Galactic l (°)", format="%.2f"),
-                        "gal_b": st.column_config.NumberColumn("Galactic b (°)", format="%.2f"),
-                        "s_ra": st.column_config.NumberColumn("RA (°)", format="%.4f"),
-                        "s_dec": st.column_config.NumberColumn("Dec (°)", format="%.4f"),
-                    },
-                )
-                st.divider()
-
-            # 2. Detailed Row-Level Table
-            st.subheader(f"{header_label} — Detailed Records ({len(display_df):,} matching rows)")
-
-            if display_df.empty:
-                st.info("No records match the current filters.")
-            else:
-                if "t_exptime" in display_df.columns:
-                    display_df["exposure_hours"] = (display_df["t_exptime"] / 3600.0).round(2)
-                if "target_category" in display_df.columns:
-                    display_df["target_category"] = display_df["target_category"].map(
-                        lambda c: cat_display_map.get(str(c), str(c))
-                    )
-                for deg_col, decimals in [("gal_l", 2), ("gal_b", 2), ("s_ra", 4), ("s_dec", 4)]:
-                    if deg_col in display_df.columns:
-                        display_df[deg_col] = display_df[deg_col].round(decimals)
-
-                preferred_cols = [
-                    "obs_collection",
-                    "target_system",
-                    "target_description",
-                    "target_name",
-                    "target_category",
-                    "exposure_hours",
-                    "pointing_count",
-                    "exposure_count",
-                    "instrument_name",
-                    "filters",
-                    "obs_title",
-                    "target_classification",
-                    "gal_l",
-                    "gal_b",
-                    "s_ra",
-                    "s_dec",
                 ]
-                cols_to_show = [c for c in preferred_cols if c in display_df.columns]
-                st.dataframe(
-                    display_df[cols_to_show].head(max_rows),
-                    width="stretch",
-                    hide_index=True,
-                    height=440,
-                    column_config={
-                        "obs_collection": st.column_config.TextColumn("Telescope"),
-                        "target_system": st.column_config.TextColumn("Target System"),
-                        "target_description": st.column_config.TextColumn("What Is It?"),
-                        "target_name": st.column_config.TextColumn("Raw Target Name"),
-                        "target_category": st.column_config.TextColumn("Category"),
-                        "exposure_hours": st.column_config.NumberColumn("Exposure (hrs)", format="%.2f"),
-                        "pointing_count": st.column_config.NumberColumn("Visits"),
-                        "exposure_count": st.column_config.NumberColumn("Exposures"),
-                        "instrument_name": st.column_config.TextColumn("Instrument"),
-                        "filters": st.column_config.TextColumn("Filters / Gratings"),
-                        "obs_title": st.column_config.TextColumn("Science Program"),
-                        "target_classification": st.column_config.TextColumn("MAST Classification"),
-                        "gal_l": st.column_config.NumberColumn("Galactic l (°)", format="%.2f"),
-                        "gal_b": st.column_config.NumberColumn("Galactic b (°)", format="%.2f"),
-                        "s_ra": st.column_config.NumberColumn("RA (°)", format="%.4f"),
-                        "s_dec": st.column_config.NumberColumn("Dec (°)", format="%.4f"),
-                    },
+                table_view = st.radio(
+                    "Catalog Granularity",
+                    options=catalog_views,
+                    index=catalog_views.index(explorer_values.get("tab3_table_view", catalog_views[0])),
+                    key="tab3_table_view",
+                    on_change=_remember_explorer_value,
+                    args=("tab3_table_view",),
                 )
 
-    with tab_about:
-        st.subheader("Motivation & Story")
-        st.markdown(
-            """
+                st.markdown('<div class="apple-section-label">Target Categories</div>', unsafe_allow_html=True)
+                tab3_categories: list[str] = []
+                is_cal_only = table_view.startswith("Instrument Calibrations")
+                for cat_key, cat_label in TARGET_CATEGORIES.items():
+                    checked = st.checkbox(
+                        cat_label,
+                        value=explorer_values.get(f"tab3_cat_{cat_key}", True),
+                        key=f"tab3_cat_{cat_key}",
+                        disabled=is_cal_only,
+                        on_change=_remember_explorer_value,
+                        args=(f"tab3_cat_{cat_key}",),
+                    )
+                    if checked:
+                        tab3_categories.append(cat_key)
+
+                st.markdown('<div class="apple-section-label">Observation Time Period</div>', unsafe_allow_html=True)
+                tab3_date_range = st.slider(
+                    "Table Start & End Date",
+                    min_value=min_obs_date,
+                    max_value=max_obs_date,
+                    value=tuple(
+                        min(max(value, min_obs_date), max_obs_date)
+                        for value in explorer_values.get("tab3_date_slider", (sel_start_date, sel_end_date))
+                    ),
+                    format="YYYY-MM-DD",
+                    key="tab3_date_slider",
+                    on_change=_remember_explorer_value,
+                    args=("tab3_date_slider",),
+                    help="Drag both knobs to filter the explorer tables to a specific date range.",
+                )
+                tab3_start_date, tab3_end_date = tab3_date_range
+                tab3_mjd_range: tuple[float, float] = (
+                    float((tab3_start_date - mjd_epoch).days),
+                    float((tab3_end_date - mjd_epoch).days + 1),
+                )
+
+                search_query = st.text_input(
+                    "Search Target / Description / Program",
+                    value=explorer_values.get("tab3_search", ""),
+                    placeholder="e.g. Saturn, WASP, Andromeda, Quasar...",
+                    key="tab3_search",
+                    on_change=_remember_explorer_value,
+                    args=("tab3_search",),
+                )
+
+                max_rows = st.select_slider(
+                    "Rows to Display",
+                    options=[50, 100, 250, 500, 1000],
+                    value=explorer_values.get("tab3_max_rows", 100),
+                    key="tab3_max_rows",
+                    on_change=_remember_explorer_value,
+                    args=("tab3_max_rows",),
+                )
+
+            with table_col:
+                if table_view == "Unique Targets":
+                    explorer_table = "targets"
+                    header_label = "Unique Targets"
+                elif table_view == "Telescope Pointings (Visits)":
+                    explorer_table = "pointings"
+                    header_label = "Telescope Pointings (Visits)"
+                elif table_view == "Individual Exposures":
+                    explorer_table = "exposures"
+                    header_label = "Individual Exposures"
+                else:
+                    explorer_table = "calibrations"
+                    header_label = "Instrument Calibration Observations"
+
+                ensure_parquet_tables_present((explorer_table,))
+                display_df = read_catalog(
+                    _TABLE_PATHS[explorer_table],
+                    columns=(
+                        *SEARCH_COLUMNS,
+                        "obs_collection",
+                        "target_category",
+                        "t_exptime",
+                        "pointing_count",
+                        "exposure_count",
+                        "instrument_name",
+                        "filters",
+                        "gal_l",
+                        "gal_b",
+                        "s_ra",
+                        "s_dec",
+                    ),
+                    telescopes=selected_missions,
+                    categories=None if is_cal_only else tab3_categories,
+                    mjd_range=tab3_mjd_range,
+                    search=search_query,
+                )
+
+                cat_display_map = {
+                    "solar_system": "Solar System",
+                    "exoplanet": "Exoplanets & Disks",
+                    "milky_way": "Milky Way & Local Group",
+                    "deep_space": "Deep Space",
+                }
+
+                # 1. Aggregated Table by Target / System
+                if not is_cal_only and not display_df.empty and "target_system" in display_df.columns:
+                    sys_df, system_count = summarize_target_systems(display_df, max_rows)
+                    sys_df["target_category"] = sys_df["target_category"].map(cat_display_map)
+
+                    st.subheader(f"Aggregated by Target System ({system_count:,} systems)")
+                    st.caption(
+                        "Groups observations of the same physical system—such as a planet and its moons "
+                        "(Saturn + Titan, Jupiter + Io/Europa), survey mosaic tiles (M31, HUDF, GOODS-N), "
+                        "or catalog naming aliases—into a single summary row."
+                    )
+                    st.dataframe(
+                        sys_df.head(max_rows),
+                        width="stretch",
+                        hide_index=True,
+                        height=350,
+                        column_config={
+                            "target_system": st.column_config.TextColumn("Target System"),
+                            "target_category": st.column_config.TextColumn("Category"),
+                            "what_is_it": st.column_config.TextColumn("What Is It?"),
+                            "telescopes": st.column_config.TextColumn("Telescopes"),
+                            "exposure_hours": st.column_config.NumberColumn("Exposure (hrs)", format="%.2f"),
+                            "pointing_count": st.column_config.NumberColumn("Visits"),
+                            "exposure_count": st.column_config.NumberColumn("Exposures"),
+                            "sub_target_count": st.column_config.NumberColumn("Sub-Targets"),
+                            "sub_targets": st.column_config.TextColumn("Included Target Names"),
+                            "science_program_title": st.column_config.TextColumn("Science Program"),
+                            "gal_l": st.column_config.NumberColumn("Galactic l (°)", format="%.2f"),
+                            "gal_b": st.column_config.NumberColumn("Galactic b (°)", format="%.2f"),
+                            "s_ra": st.column_config.NumberColumn("RA (°)", format="%.4f"),
+                            "s_dec": st.column_config.NumberColumn("Dec (°)", format="%.4f"),
+                        },
+                    )
+                    st.divider()
+
+                # 2. Detailed Row-Level Table
+                st.subheader(f"{header_label} — Detailed Records ({len(display_df):,} matching rows)")
+
+                if display_df.empty:
+                    st.info("No records match the current filters.")
+                else:
+                    # Format only the rows actually displayed (not the full filtered table)
+                    display_df = display_df.head(max_rows).copy()
+                    if "t_exptime" in display_df.columns:
+                        display_df["exposure_hours"] = (display_df["t_exptime"] / 3600.0).round(2)
+                    if "target_category" in display_df.columns:
+                        display_df["target_category"] = (
+                            display_df["target_category"]
+                            .astype("string")
+                            .map(lambda c: cat_display_map.get(str(c), str(c)))
+                        )
+                    for deg_col, decimals in [("gal_l", 2), ("gal_b", 2), ("s_ra", 4), ("s_dec", 4)]:
+                        if deg_col in display_df.columns:
+                            display_df[deg_col] = display_df[deg_col].round(decimals)
+
+                    preferred_cols = [
+                        "obs_collection",
+                        "target_system",
+                        "target_description",
+                        "target_name",
+                        "target_category",
+                        "exposure_hours",
+                        "pointing_count",
+                        "exposure_count",
+                        "instrument_name",
+                        "filters",
+                        "obs_title",
+                        "target_classification",
+                        "gal_l",
+                        "gal_b",
+                        "s_ra",
+                        "s_dec",
+                    ]
+                    cols_to_show = [c for c in preferred_cols if c in display_df.columns]
+                    st.dataframe(
+                        display_df[cols_to_show].head(max_rows),
+                        width="stretch",
+                        hide_index=True,
+                        height=440,
+                        column_config={
+                            "obs_collection": st.column_config.TextColumn("Telescope"),
+                            "target_system": st.column_config.TextColumn("Target System"),
+                            "target_description": st.column_config.TextColumn("What Is It?"),
+                            "target_name": st.column_config.TextColumn("Raw Target Name"),
+                            "target_category": st.column_config.TextColumn("Category"),
+                            "exposure_hours": st.column_config.NumberColumn("Exposure (hrs)", format="%.2f"),
+                            "pointing_count": st.column_config.NumberColumn("Visits"),
+                            "exposure_count": st.column_config.NumberColumn("Exposures"),
+                            "instrument_name": st.column_config.TextColumn("Instrument"),
+                            "filters": st.column_config.TextColumn("Filters / Gratings"),
+                            "obs_title": st.column_config.TextColumn("Science Program"),
+                            "target_classification": st.column_config.TextColumn("MAST Classification"),
+                            "gal_l": st.column_config.NumberColumn("Galactic l (°)", format="%.2f"),
+                            "gal_b": st.column_config.NumberColumn("Galactic b (°)", format="%.2f"),
+                            "s_ra": st.column_config.NumberColumn("RA (°)", format="%.4f"),
+                            "s_dec": st.column_config.NumberColumn("Dec (°)", format="%.4f"),
+                        },
+                    )
+
+    if tab_about.open:
+        with tab_about:
+            st.subheader("Motivation & Story")
+            st.markdown(
+                """
             <div class="apple-story-card">
             I love maps, graphs, and visualizations, like many other space and science enthusiasts. One day, the
             Hubble Ultra Deep Field image came across my feed, and I thought: I really want to see a heatmap of where
@@ -789,21 +824,21 @@ def main() -> None:
             observations along the equator in the Equatorial reference frame.
             </div>
             """,
-            unsafe_allow_html=True,
-        )
+                unsafe_allow_html=True,
+            )
 
-        st.markdown(
-            "**Source Code & Documentation:** "
-            "[github.com/JustMohsen/space-telescopes-observation-heatmap]"
-            "(https://github.com/JustMohsen/space-telescopes-observation-heatmap)"
-        )
+            st.markdown(
+                "**Source Code & Documentation:** "
+                "[github.com/JustMohsen/space-telescopes-observation-heatmap]"
+                "(https://github.com/JustMohsen/space-telescopes-observation-heatmap)"
+            )
 
-        st.divider()
+            st.divider()
 
-        abt_col1, abt_col2 = st.columns(2, gap="large")
-        with abt_col1:
-            st.subheader("10 Space Observatories (1978–2026)")
-            st.markdown("""
+            abt_col1, abt_col2 = st.columns(2, gap="large")
+            with abt_col1:
+                st.subheader("10 Space Observatories (1978–2026)")
+                st.markdown("""
                 Rather than downloading petabytes of raw `.fits` image files, this application queries **1,837,561 science
                 observation records** from the **Mikulski Archive for Space Telescopes (MAST)** at the Space Telescope
                 Science Institute (**STScI**), spanning ten missions:
@@ -816,37 +851,37 @@ def main() -> None:
                 - **Kepler (`KeplerFFI`), K2 (`K2FFI`), & TESS (`2009–2026`):** Wide-field photometers staring at hundreds of thousands of stars to detect exoplanet transits.
                 """)
 
-        with abt_col2:
-            st.subheader("Patterns You Can Spot on the Map")
-            st.markdown("""
+            with abt_col2:
+                st.subheader("Patterns You Can Spot on the Map")
+                st.markdown("""
                 1. **The 60.2° Plane Tilt:** Enable both the **Milky Way Galactic Plane** and the **Solar System Ecliptic Plane** in the sidebar. Our Solar System orbits tilted at **60.2°** relative to the Milky Way disk.
                 2. **The Galactic Zone of Avoidance:** Filter to **Deep Space / Extragalactic** in the Galactic frame. A clean band appears along the Galactic Equator ($b = 0^\\circ$) where Milky Way dust blocks distant galaxies, pushing deep fields toward high galactic latitudes.
                 3. **The Celestial Equator Belt (SDSS Stripe 82):** In the Southern Galactic Hemisphere ($b \\approx -43^\\circ$ to $-63^\\circ$), a curved arc traces Earth's Celestial Equator ($\\text{Dec} \\approx 0^\\circ$), where both Northern and Southern Hemisphere ground telescopes can jointly follow up space-telescope targets.
                 4. **Kepler's Cygnus Field & K2's Ecliptic Stepping Stones:** Filter to `KeplerFFI` to see its four-year stare just above the Milky Way disk in Cygnus, or `K2FFI` to see how engineers balanced the spacecraft with solar radiation pressure along the Ecliptic plane.
                 """)
 
-        st.divider()
-        st.subheader("Methodology: Processing 1.84 Million Archive Records")
+            st.divider()
+            st.subheader("Methodology: Processing 1.84 Million Archive Records")
 
-        meth1, meth2, meth3 = st.columns(3, gap="medium")
-        with meth1:
-            st.markdown("""
+            meth1, meth2, meth3 = st.columns(3, gap="medium")
+            with meth1:
+                st.markdown("""
                 #### 1. Physics-Aware Deduplication
                 Raw archive catalogs contain structural duplicates that would distort a naive heatmap:
                 - **Hubble Mosaic Co-Adds (`HAP-SVM` / `HAP-MVM`):** MAST stores both the individual camera exposures and synthetic multi-filter stacks. We exclude synthetic co-adds while preserving every physical mosaic tile so exposure time is never double-counted.
                 - **JWST Micro-Shutters & Dichroics:** A single **NIRSpec MSA** pointing opens ~100 micro-shutters simultaneously (creating 100 catalog rows for one exposure), and **MIRI's IFU** splits one beam into 12 sub-bands at once. We collapse simultaneous multi-channel readouts by `(mission, proposal, instrument, timestamp)` so one hour of telescope time equals one hour.
                 """)
 
-        with meth2:
-            st.markdown("""
+            with meth2:
+                st.markdown("""
                 #### 2. Equal-Area Spherical Math (`HEALPix`)
                 Standard latitude-longitude grids pinch together at the poles, making polar regions look artificially small or over-dense.
                 - We use **Astropy (`SkyCoord`)** to transform native Equatorial coordinates $(\\text{RA}, \\text{Dec})$ into **Galactic** $(l, b)$ and **Ecliptic** $(\\lambda, \\beta)$ frames.
                 - We tessellate the sphere using **HEALPix (`healpy`)**—the equal-area spherical pixelation developed for the *WMAP* and *Planck* Cosmic Microwave Background missions—so every cell covers the exact same solid angle ($\\Omega$).
                 """)
 
-        with meth3:
-            st.markdown("""
+            with meth3:
+                st.markdown("""
                 #### 3. Four-Table Normalization & Taxonomy
                 Our offline ETL pipeline compiles four `zstd`-compressed Parquet tables:
                 - **`exposures` (`982,227` rows):** Every physical camera exposure and mosaic tile.
