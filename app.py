@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import sys
-import urllib.request
 from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd
+import requests
 import streamlit as st
 
 _SRC_DIR = Path(__file__).resolve().parent / "src"
@@ -183,28 +183,40 @@ def _inject_apple_ui_styles() -> None:
 def ensure_parquet_tables_present() -> None:
     """Download pre-computed Parquet tables from GitHub Releases on first cloud boot if missing locally."""
     required_paths = [
-        EXPOSURES_PARQUET_PATH,
-        POINTINGS_PARQUET_PATH,
         TARGETS_PARQUET_PATH,
+        POINTINGS_PARQUET_PATH,
         CALIBRATIONS_PARQUET_PATH,
+        EXPOSURES_PARQUET_PATH,
     ]
     missing = [p for p in required_paths if not p.exists()]
     if not missing:
         return
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    with st.spinner("Downloading telescope catalog from GitHub Releases (one-time cloud setup)..."):
-        for target_path in missing:
-            url = f"{GITHUB_RELEASE_BASE_URL}/{target_path.name}"
-            tmp_path = target_path.with_suffix(".parquet.part")
-            try:
-                urllib.request.urlretrieve(url, tmp_path)
-                tmp_path.replace(target_path)
-            except Exception as exc:
-                if tmp_path.exists():
-                    tmp_path.unlink()
-                st.warning(f"Could not download `{target_path.name}` from GitHub Releases ({exc}).")
-                break
+    status_box = st.empty()
+    for idx, target_path in enumerate(missing, start=1):
+        url = f"{GITHUB_RELEASE_BASE_URL}/{target_path.name}"
+        tmp_path = target_path.with_suffix(".parquet.part")
+        status_box.info(f"Downloading database ({idx}/{len(missing)}): `{target_path.name}` from GitHub Releases...")
+        try:
+            resp = requests.get(
+                url,
+                headers={"User-Agent": "SpaceTelescopeHeatmap/1.0"},
+                stream=True,
+                timeout=120,
+            )
+            resp.raise_for_status()
+            with open(tmp_path, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        f.write(chunk)
+            tmp_path.replace(target_path)
+        except Exception as exc:
+            if tmp_path.exists():
+                tmp_path.unlink()
+            st.error(f"Could not download `{target_path.name}` from GitHub Releases: {exc}")
+            break
+    status_box.empty()
 
 
 @st.cache_data(show_spinner=False)
@@ -845,4 +857,10 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        import traceback
+
+        st.error("### Application Error")
+        st.code(traceback.format_exc(), language="python")
