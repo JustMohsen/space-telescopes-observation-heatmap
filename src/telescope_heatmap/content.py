@@ -35,8 +35,9 @@ PERSONAL_STORY_PARAGRAPHS = (
 )
 
 AI_DISCLOSURE = (
-    "I built this project with AI assistance: AI wrote most of the text and created the design, while I "
-    "focused on the technical and scientific structure, iterative cleanup, functional testing, and "
+    "I built this project with AI assistance: AI wrote most of the text (except for this motivation "
+    "section) and created the design, while I focused on the technical and scientific structure, "
+    "iterative cleanup, functional testing, and "
     "checking the accuracy of the coordinate systems, telescope information, observation categories, and "
     "target classifications."
 )
