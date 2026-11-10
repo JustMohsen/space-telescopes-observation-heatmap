@@ -726,8 +726,11 @@ def main() -> None:
             to AI. It is not the most polished, but I am really happy with it and went through many iterations. I also
             learned that there is a bias toward the Northern Galactic Pole—partly because most historical ground-based
             sky surveys were built in Earth's northern hemisphere (which faces the North Galactic Pole and the Virgo
-            Supercluster), and partly because the Southern Galactic Hemisphere contains the Large and Small Magellanic
-            Clouds and the Magellanic Stream, which obstruct a chunk of the southern extragalactic sky.
+            Supercluster), and we try to point our space telescopes at the same targets for follow-up and comparison,
+            and partly because the Southern Galactic Hemisphere contains the Large and Small Magellanic Clouds, which
+            obstruct a chunk of the southern extragalactic sky. Pointing space telescopes at the same targets observed
+            by ground-based telescopes within their observable regions is also the reason we see a dense belt of
+            observations along the equator in the Equatorial reference frame.
             </div>
             """,
             unsafe_allow_html=True,
