@@ -189,6 +189,7 @@ def load_parquet_tables(mtime_key: float) -> dict[str, pd.DataFrame]:
 def main() -> None:
     st.set_page_config(
         page_title="Space Telescopes Observation Heatmap",
+        page_icon="🔭",
         layout="wide",
     )
     _inject_apple_ui_styles()
