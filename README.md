@@ -84,6 +84,11 @@ uv run pre-commit run --all-files
 uv run pytest
 ```
 
+## Future work
+
+- [ ] **Make observation images easier to explore.** Add a simple image browser with readable previews and straightforward JPEG/PNG downloads, starting with Hubble and JWST. Prefer existing archive previews and processed images; explain when an observation contains spectra or other data rather than an image, or has no public preview. Keep the original MAST links and distinguish illustrative color composites from scientific data. Prepare and cache previews outside interactive refreshes to keep the app responsive.
+- [ ] **Explore a related telescope-image curation project.** Build a searchable collection organized by target, telescope, instrument, wavelength/filter, and observation type. Investigate duplicate detection, quality flags, and reproducible image rendering such as contrast stretching, artifact handling, and color composites. Preserve original data, processing history, scientific meaning, and source attribution so visual cleanup does not misrepresent observations.
+
 ## More about the project
 
 - [Architecture and scientific methodology](./telescope_heatmap_blueprint.md)
