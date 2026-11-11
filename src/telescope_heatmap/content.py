@@ -1,4 +1,4 @@
-"""Public project story, AI disclosure, and map-detail note."""
+"""Public project story, disclosures, map-detail note, and related visualizations."""
 
 PERSONAL_STORY_PARAGRAPHS = (
     (
@@ -47,3 +47,11 @@ MAP_DETAIL_NOTE = (
     "Fine and Ultra-Fine change the underlying HEALPix bins but may look similar. Calculations still "
     "use the selected binning; PNG exports use a denser display grid."
 )
+
+RELATED_VISUALIZATIONS_MARKDOWN = """Explore these complementary views of telescope observations and the wider Universe:
+
+- **[MAST's View of the Sky — STScI/MAST](https://spacetelescope.github.io/mast-blog/mast-heatmap.html)** — Observation-density maps, mission comparisons, and downloadable wallpapers in equatorial, ecliptic, and Galactic coordinates.
+- **[Hubble Skymap — NASA](https://science.nasa.gov/mission/hubble/multimedia/online-activities/hubble-skymap/)** — An interactive sky map for browsing Hubble images and descriptions of galaxies, stars, nebulae, and other objects.
+- **[The Map of the Universe — Johns Hopkins University](https://mapoftheuniverse.net/)** — A visual journey through a slice of the Universe, showing galaxies and quasars by position and redshift using Sloan Digital Sky Survey data.
+- **[Space Telescopes — Orbital Radar](https://orbitalradar.com/space-telescopes)** — A space-telescope directory with links to orbit trackers and mission profiles, adding context about where the observatories themselves are located.
+"""

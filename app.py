@@ -33,7 +33,12 @@ from telescope_heatmap.config import (
     TARGET_CATEGORIES,
     TARGETS_PARQUET_PATH,
 )
-from telescope_heatmap.content import AI_DISCLOSURE, MAP_DETAIL_NOTE, PERSONAL_STORY_PARAGRAPHS
+from telescope_heatmap.content import (
+    AI_DISCLOSURE,
+    MAP_DETAIL_NOTE,
+    PERSONAL_STORY_PARAGRAPHS,
+    RELATED_VISUALIZATIONS_MARKDOWN,
+)
 from telescope_heatmap.viz import (
     build_2d_allsky_figure,
     build_3d_globe_figure,
@@ -890,6 +895,10 @@ def main() -> None:
                 - **`targets` (`171,473` rows):** Unique targets rolled up into canonical **Target Systems** (grouping *Saturn*, *Titan*, and *Enceladus* under `Saturn System`, or `NGC 224` under `Andromeda Galaxy (M31)`).
                 - **`calibrations` (`110,463` rows):** Dark frames, flats, and sky backgrounds (`ECLIPTIC-RA12H`), isolated so they never bias science maps.
                 """)
+
+            st.divider()
+            st.subheader("Related visualizations")
+            st.markdown(RELATED_VISUALIZATIONS_MARKDOWN)
 
     st.divider()
     st.caption(f"¹ Map detail: {MAP_DETAIL_NOTE}")

@@ -46,6 +46,15 @@ Moving Solar System targets appear in the observation explorer and are excluded 
 
 Coverage reflects the bundled catalog snapshot and each mission's observation history. It is not a live archive feed. The app uses observation metadata from [MAST](https://archive.stsci.edu/), rather than downloading astronomical image files.
 
+## Related visualizations
+
+Explore these complementary views of telescope observations and the wider Universe:
+
+- **[MAST's View of the Sky — STScI/MAST](https://spacetelescope.github.io/mast-blog/mast-heatmap.html)** — Observation-density maps, mission comparisons, and downloadable wallpapers in equatorial, ecliptic, and Galactic coordinates.
+- **[Hubble Skymap — NASA](https://science.nasa.gov/mission/hubble/multimedia/online-activities/hubble-skymap/)** — An interactive sky map for browsing Hubble images and descriptions of galaxies, stars, nebulae, and other objects.
+- **[The Map of the Universe — Johns Hopkins University](https://mapoftheuniverse.net/)** — A visual journey through a slice of the Universe, showing galaxies and quasars by position and redshift using Sloan Digital Sky Survey data.
+- **[Space Telescopes — Orbital Radar](https://orbitalradar.com/space-telescopes)** — A space-telescope directory with links to orbit trackers and mission profiles, adding context about where the observatories themselves are located.
+
 ## Run locally
 
 Use Python 3.12 or later and [uv](https://docs.astral.sh/uv/):
