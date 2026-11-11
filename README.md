@@ -94,3 +94,9 @@ uv run pytest
 - [Architecture and scientific methodology](./telescope_heatmap_blueprint.md)
 - [Performance measurements and deployment notes](./docs/performance.md)
 - [JWST catalog and sky sparsity audit](./docs/jwst-catalog-audit.md)
+
+## License and data attribution
+
+The project's original source code and accompanying documentation are licensed under the [MIT License](./LICENSE), copyright 2026 JustMohsen.
+
+Observation metadata comes from the [Mikulski Archive for Space Telescopes (MAST)](https://archive.stsci.edu/). Archive data, third-party images, and software dependencies retain their applicable licenses and terms; the project's MIT License does not replace them. Follow the [MAST data-use policy](https://archive.stsci.edu/publishing/data-use) and any mission- or product-specific attribution requirements when reusing archive material.
