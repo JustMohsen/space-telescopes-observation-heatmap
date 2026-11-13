@@ -1,6 +1,6 @@
 # Space Telescopes Observation Heatmap — Project Blueprint & Plan
 
-> Consolidated from the initial design conversation in [Hubble Observation Heatmap Project.pdf](file:///Users/justmohesn/My%20Drive/Personal%20Projects%20with%20AI/Space%20Telescopes%20Observation%20Heatmap/Hubble%20Observation%20Heatmap%20Project.pdf) and updated with architectural refinements and Step 1 data exploration findings.
+> Consolidated from the initial design conversation, architectural refinements, and early data-exploration findings. This document records the original blueprint and implementation history; parts predate the current memory optimizations and newer features. For current development guidance, start with [AGENTS.md](./AGENTS.md), [README.md](./README.md), and the [performance notes](./docs/performance.md), then check the relevant implementation and tests.
 
 ---
 

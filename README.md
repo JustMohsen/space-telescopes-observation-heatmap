@@ -87,6 +87,8 @@ The pipeline produces exposure, pointing, target, and calibration Parquet tables
 
 ## Development
 
+For AI-assisted development, start with [AGENTS.md](./AGENTS.md). It summarizes the current code layout, scientific assumptions, memory constraints, and verification commands, with links to more detailed documentation.
+
 ```bash
 uv run pre-commit install
 uv run pre-commit run --all-files
@@ -100,7 +102,7 @@ uv run pytest
 
 ## More about the project
 
-- [Architecture and scientific methodology](./telescope_heatmap_blueprint.md)
+- [Original blueprint and implementation history](./telescope_heatmap_blueprint.md)
 - [Performance measurements and deployment notes](./docs/performance.md)
 - [JWST catalog and sky sparsity audit](./docs/jwst-catalog-audit.md)
 
